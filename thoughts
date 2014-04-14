@@ -8,11 +8,12 @@ goals:
     - they seem to be duplicates. http://arxiv.org/pdf/cs.LG/0212028 vs http://arxiv.org/pdf/cs/0212028 (same paper)
 - make corpus
   - arxiv is mostly pdf, contains some ps and text and source sometimes
-    - use pdf2line?
     - don't use source, that would need tex parser (this might be do-able)
+    - it turns out pdftotext is really good at extracting text from pdfs
+      - the layout option is also nice, but not really for this purpose
   - tokenization
     - keep named entities, dataset isn't likely to have a lot except for references
-    - subsampling as in Mikhalov.c?
+    - subsampling as in Mikholov.c?
 - use PCA
 
 
