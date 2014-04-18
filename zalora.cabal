@@ -68,3 +68,7 @@ executable makeCorpus
   main-is:             makeCorpus.hs
   build-depends:       base >= 4.6 && <4.7, process, MissingH, directory
   default-language:    Haskell2010
+executable classify
+  main-is:             classify.hs
+  build-depends:       base >= 4.6 && <4.7, vector, random, containers, MonadRandom, random-extras
+  default-language:    Haskell2010

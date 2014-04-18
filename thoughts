@@ -12,8 +12,11 @@ goals:
     - it turns out pdftotext is really good at extracting text from pdfs
       - the layout option is also nice, but not really for this purpose
   - tokenization
+    - use http://www.statmt.org/moses/?n=moses.baseline
     - keep named entities, dataset isn't likely to have a lot except for references
     - subsampling as in Mikholov.c?
+- distributed vector representation
+  - use skipgrams
 - use PCA
 
 
