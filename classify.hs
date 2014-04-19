@@ -6,9 +6,9 @@
 -- each word in the vocabulary is an output node, too
 -- for each word in the vocabulary:
    -- for each occurence:
-      -- select a random value R, and look up R
-      --   words before and R after the occurence
-      -- add them to the training data
+	  -- select a random value R, and look up R
+	  --   words before and R after the occurence
+	  -- add them to the training data
  -- shuffle the training data
  -- now train the neural net, checking the output with a softmax function
  -- (the input is a word, the output should be a word from the context)
@@ -21,10 +21,13 @@
 
 import qualified Data.Vector.Unboxed as V
 import System.Random
-import Control.Monad (forM_, foldM)
+import System.Random.Shuffle
+import Control.Monad (forM_, foldM, liftM)
 import Control.Monad.Random
 import Debug.Trace
 import Data.List (foldl)
+import Data.Foldable (concatMap, fold)
+import qualified Data.Traversable as T
 import qualified Data.Map as M
 type Vec = V.Vector Double
 type Mat = [Vec]
@@ -125,19 +128,36 @@ wordStuff = M.fromList [
 lastN :: Int -> [a] -> [a]
 lastN n xs = foldl (const .drop 1) xs (drop n xs)
 
-runWords :: (RandomGen g) => M.Map String (Int, [([String], [String])]) -> Int -> M.Map Int Vec -> Mat -> Rand g (M.Map Int Vec, Mat)
-runWords words c feat out =
-	-- // shuffle list
-	foldM doIter (feat, out) (M.toList words)
+-- convert a word list like above into shuffled pairs of training data
+wordPairs :: (RandomGen g) => M.Map String (Int, [([String], [String])]) -> Int -> Rand g [(Int, Int)]
+wordPairs words c = 
+	concatMapM indivWordPairs words >>= shuffleM
 	where
-		doIter (f, o) (wrd, (i, inst)) = do
-			(thisf, newo) <- foldM doIter' ((f M.! i), o) inst
-			return $ (M.insert i thisf f, newo)
-		doIter' (f, o) (before, after) = do
+		indivWordPairs (i, inst)        = concatMapM (instWordPairs i) inst
+		instWordPairs i (before, after) = do
 			r <- getRandomR (1, c)
-			--let r = c
-			return $ foldl rw (f, o) ((lastN r before) ++ (take r after))
-			where rw (f, o) wrd = runWord f o (fst (words M.! wrd))
+			return $ map ((,) i . fst . (words M.!)) $ (lastN r before) ++ take r after
+		concatMapM f = liftM fold . T.mapM f
+
+runWords :: (RandomGen g) => M.Map String (Int, [([String], [String])]) -> Int -> M.Map Int Vec -> Mat -> Rand g (M.Map Int Vec, Mat)
+runWords words c feat out = do
+	pairs <- wordPairs words c
+	foldM runWordPair (feat, out) pairs
+	where
+		runWordPair (f, o) (a, b) = do
+			let (thisf, newo) = runWord (f M.! a) o b
+			return (M.insert a thisf f, newo)
+	-- // shuffle list
+	--foldM doIter (feat, out) (M.toList words)
+	--where
+	--	doIter (f, o) (wrd, (i, inst)) = do
+	--		(thisf, newo) <- foldM doIter' ((f M.! i), o) inst
+	--		return $ (M.insert i thisf f, newo)
+	--	doIter' (f, o) (before, after) = do
+	--		r <- getRandomR (1, c)
+	--		--let r = c
+	--		return $ foldl rw (f, o) ((lastN r before) ++ (take r after))
+	--		where rw (f, o) wrd = runWord f o (fst (words M.! wrd))
 
 
 runAllWords :: IO ()
