@@ -27,8 +27,16 @@ import Control.Monad.Random
 import Debug.Trace
 import Data.List (foldl)
 import Data.Foldable (concatMap, fold)
+import Text.Printf
+import Data.String.Utils
+import qualified Data.Packed.Matrix as Mt
+import qualified Data.Packed.Vector as Mt
+import qualified Numeric.LinearAlgebra as Mt
+import qualified Numeric.LinearAlgebra.Algorithms as Mt
 import qualified Data.Traversable as T
 import qualified Data.Map as M
+import System.Cmd (rawSystem)
+import System.Exit (ExitCode (ExitSuccess))
 type Vec = V.Vector Double
 type Mat = [Vec]
 -- output is a V * feat matrix
@@ -43,10 +51,14 @@ softmax a i = (expa V.! i) / (V.sum expa)
 -- k and i can be swapped, so I don't have to figure out
 -- which does what
 softmax' :: Vec -> Int -> Int -> Double
-softmax' a k i = ((delta k i) - softmax a k) * softmax a i
+softmax' a i k = ((delta k i) - softmax a k) * softmax a i
 	where delta a b = if a == b then 1 else 0
 dotProduct :: Vec -> Vec -> Double
 dotProduct a b = V.foldl (\l (a,b) -> l + a * b) 0 $ V.zip a b
+logsoftmax :: Vec -> Int -> Double
+logsoftmax a i = if (0 == softmax a i) then error "log of zero" else log $ softmax a i
+logsoftmax' :: Vec -> Int -> Int -> Double
+logsoftmax' a i k = (softmax' a i k) / (softmax a i)
 
 --propagate :: Double -> Vec -> Vec -> Double
 --propagate gin weights errs = gin * dotProduct weights errs
@@ -66,11 +78,11 @@ runWord :: Vec -> Mat -> Int -> (Vec, Mat)
 runWord feature output expected = (newfeat, newout)
 	where
 		out = runNetwork feature output
-		softerr = (1 - softmax out expected)
+		softerr = 0 - (logsoftmax out expected)
 		-- calculate the delta-k for the output layer
 		-- the softmax can be seen as another layer on top of it with fixed weight 1
 		-- this means this is also the modified error of the output layer
-		moderr = V.map (* softerr) $ V.generate (V.length out) (softmax' out expected)
+		moderr = V.map (* softerr) $ V.generate (V.length out) (logsoftmax' out expected)
 		-- calculate the weight adjustment between the output and projection
 		newout = imap processout output
 		processout k feat = V.zipWith (adjustprojoutcon (moderr V.! k)) feature feat
@@ -80,7 +92,7 @@ runWord feature output expected = (newfeat, newout)
 		-- calculate the new weights for the feature vector
 		newfeat = V.zipWith (\w d -> w + rate * d) feature delta_j
 		--output !! k ! j + rate * (feature ! j) * (moderr ! k)
-		rate = 0.025 :: Double
+		rate = 0.005 :: Double
 		traceShowId a = trace (show a) a
 
 
@@ -113,14 +125,14 @@ randomNetwork vocab dimen = do
 --			if (x > 5000) then return () else	iter (x + 1) ft7 ot7
 
 wordStuff = M.fromList [
-		("the", (0, [([], ["quick", "brown", "fox"]), (["fox", "jumps", "over"], ["lazy", "dog"])])),
+		("the",   (0, [([], ["quick", "brown", "fox"]), (["fox", "jumps", "over"], ["lazy", "dog"])])),
 		("quick", (1, [(["the"], ["brown", "fox", "jumps"])])),
 		("brown", (2, [(["the", "quick"], ["fox", "jumps", "over"])])),
-		("fox", (3, [(["the", "quick", "brown"], ["jumps", "over", "the"])])),
+		("fox",   (3, [(["the", "quick", "brown"], ["jumps", "over", "the"])])),
 		("jumps", (4, [(["quick", "brown", "fox"], ["over", "the", "lazy"])])),
-		("over", (5, [(["brown", "fox", "jumps"], ["the", "lazy", "dog"])])),
-		("lazy", (6, [(["jumps", "over", "the"], ["dog"])])),
-		("dog", (7, [(["over", "the", "lazy"], [])]))
+		("over",  (5, [(["brown", "fox", "jumps"], ["the", "lazy", "dog"])])),
+		("lazy",  (6, [(["jumps", "over", "the"], ["dog"])])),
+		("dog",   (7, [(["over", "the", "lazy"], [])]))
 	]
 
 
@@ -147,22 +159,10 @@ runWords words c feat out = do
 		runWordPair (f, o) (a, b) = do
 			let (thisf, newo) = runWord (f M.! a) o b
 			return (M.insert a thisf f, newo)
-	-- // shuffle list
-	--foldM doIter (feat, out) (M.toList words)
-	--where
-	--	doIter (f, o) (wrd, (i, inst)) = do
-	--		(thisf, newo) <- foldM doIter' ((f M.! i), o) inst
-	--		return $ (M.insert i thisf f, newo)
-	--	doIter' (f, o) (before, after) = do
-	--		r <- getRandomR (1, c)
-	--		--let r = c
-	--		return $ foldl rw (f, o) ((lastN r before) ++ (take r after))
-	--		where rw (f, o) wrd = runWord f o (fst (words M.! wrd))
-
 
 runAllWords :: IO ()
 runAllWords = do
-	(feat, out) <- randomNetwork 8 7
+	(feat, out) <- randomNetwork 8 8
 	let ft = M.fromAscList $ imap (,) feat
 	(ft_, ot_) <- iter (ft, out) 0
 	putStrLn $ "complete: "
@@ -170,10 +170,56 @@ runAllWords = do
 	putStrLn $ "output:  " ++ (show $ ot_)
 	let v = runNetwork (ft_ M.! 0) ot_
 	let outs = V.imap (\i _ -> softmax v i) v
-	putStrLn $ "full softmax output: " ++ (show outs)
+	putStrLn $ "full softmax output: " ++ (show $ map (printf "%.2f" :: Double->String) $ V.toList outs)
+	putStrLn $ "PCA: " ++ (show $ length $ pca 2 ft_)
+	let wordmap = M.fromList $ map (\(w, (x, _)) -> (x, w)) (M.toList wordStuff)
+	a <- plot $ imap (\i x -> (wordmap M.! i, x Mt.@> 0, x Mt.@> 1) ) $ pca 2 ft_
+	return ()
 	where iter (ft, ot) x = do
 		(ft2, ot2) <- evalRandIO $ runWords wordStuff 3 ft ot
-		putStrLn $ "iteration complete: " ++ (show $ sum $ map V.sum $ map snd $ M.toList $ ft2)
-		if x < 3000 then iter (ft2, ot2) (x + 1) else return (ft2, ot2)
-
+		putStrLn $ "iteration " ++ (show x) ++ " complete " ++ (show $ sum $ map V.sum $ map snd $ M.toList $ ft2)
+		let v = runNetwork (ft2 M.! 0) ot2
+		let outs = V.imap (\i _ -> softmax v i) v
+		putStrLn $ "full softmax output: " ++ (show $ map (printf "%.2f" :: Double->String) $ V.toList outs)
+		putStrLn $ "network output     : " ++ (show $ map (printf "%.2f" :: Double->String) $ V.toList v)
+		if x < 1000 then iter (ft2, ot2) (x + 1) else return (ft2, ot2)
+-- plot "plot1.dat" using 2:3:1 with labels title ""
 main = runAllWords
+-- full softmax output: ["0.00","0.32","0.01","0.00","0.02","0.32","0.32","0.01"]
+-- full softmax output: ["0.00","0.32","0.02","0.01","0.01","0.32","0.31","0.01"]
+-- full softmax output: ["0.00","0.33","0.00","0.01","0.01","0.32","0.33","0.00"]
+
+normalize_mean :: [Mt.Vector Double] -> [Mt.Vector Double]
+normalize_mean x = map (flip (-) mean) x where
+	mean = (sum x) / (fromIntegral $ length x)
+
+covariance_matrix :: [Mt.Vector Double] -> Mt.Matrix Double
+covariance_matrix x = (sum $ map (\a -> (Mt.asColumn a) * (Mt.asRow a)) x) / (fromIntegral $ length x)
+
+eigenvectors :: Mt.Matrix Double -> [Mt.Vector Double]
+eigenvectors x = Mt.toColumns x where
+	(u, s, v) = Mt.svd x
+
+pca :: Int -> M.Map Int Vec -> [Mt.Vector Double]
+pca dims x = map (`Mt.vXm` base) dataset
+	where
+		base = Mt.fromColumns $ take dims $ eigenvectors $ covariance_matrix $ dataset
+		dataset = normalize_mean $ toVecArray x
+		toVecArray :: M.Map Int Vec -> [Mt.Vector Double]
+		toVecArray x = map (Mt.fromList . V.toList . snd) $ M.toAscList x
+
+-- loosely based on http://hackage.haskell.org/package/easyplot-1.0/docs/src/Graphics-EasyPlot.html#Plot
+plot :: (Show a, Num a) => [(String, a, a)] -> IO Bool
+plot points = do
+	writeFile filename dataset
+	exitCode <- rawSystem "gnuplot" args
+	return $ exitCode == ExitSuccess
+	where 
+		-- todo see if this works when haskell uses scientific notation
+		dataset = unlines $ map (\(s, a, b) -> s ++ " " ++ (show a) ++ " " ++ (show b)) points
+		args = ["-e", join ";" [
+				"set term png",
+				"set offsets 1,1,1,1",
+				"set output \"pca.png\"",
+				"plot \"" ++ filename ++ "\" using 2:3:1 with labels title \"\""]]
+		filename = "plot1.dat"
