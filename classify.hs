@@ -28,6 +28,7 @@ import Data.List (foldl)
 import Data.Foldable (concatMap, fold)
 import Text.Printf
 import Data.String.Utils
+import Data.Maybe (fromJust, fromMaybe)
 import qualified Data.Packed.Matrix as Mt
 import qualified Data.Packed.Vector as Mt
 import qualified Numeric.LinearAlgebra as Mt
@@ -36,6 +37,9 @@ import qualified Data.Traversable as T
 import qualified Data.Map as M
 import System.Cmd (rawSystem)
 import System.Exit (ExitCode (ExitSuccess))
+import qualified Data.Trie as Tr
+import qualified Data.ByteString as B
+import qualified Data.ByteString.UTF8 as UTF8
 
 type DVec = Mt.Vector Double
 type DMat = Mt.Matrix Double
@@ -47,14 +51,16 @@ runNetwork feature output = feature `Mt.vXm` output
 softmax :: DVec -> Int -> Double
 softmax a i = (expa Mt.@> i) / (Mt.sumElements expa)
 	where expa = Mt.mapVector exp $ a
--- derivative: (d(k,i) - s(a,k)) * s(a,i)
--- k and i can be swapped, so I don't have to figure out
--- which does what
+-- derivative over q_k: = (d(k,i) - s(a,k)) * s(a,i)
+-- k and i can be swapped
+-- from wikipedia/Softmax_function
 softmax' :: DVec -> Int -> Int -> Double
 softmax' a i k = ((delta k i) - softmax a k) * softmax a i
 	where delta a b = if a == b then 1 else 0
 logsoftmax :: DVec -> Int -> Double
 logsoftmax a i = if (0 == softmax a i) then error "log of zero" else log $ softmax a i
+-- derivative over q_k: s'(a, i, k) / s(a, i)
+-- k and i can *not* be swapped
 logsoftmax' :: DVec -> Int -> Int -> Double
 logsoftmax' a i k = (softmax' a i k) / (softmax a i)
 
@@ -91,34 +97,48 @@ randomNetwork vocab dimen = do
 	blist <- replicateM (vocab * dimen) randomIO
 	return ((vocab Mt.>< dimen)alist, (dimen Mt.>< vocab)blist)
 
-wordStuff = M.fromList [
-		("the",   (0, [([], ["quick", "brown", "fox"]), (["fox", "jumps", "over"], ["lazy", "dog"])])),
-		("quick", (1, [(["the"], ["brown", "fox", "jumps"])])),
-		("brown", (2, [(["the", "quick"], ["fox", "jumps", "over"])])),
-		("fox",   (3, [(["the", "quick", "brown"], ["jumps", "over", "the"])])),
-		("jumps", (4, [(["quick", "brown", "fox"], ["over", "the", "lazy"])])),
-		("over",  (5, [(["brown", "fox", "jumps"], ["the", "lazy", "dog"])])),
-		("lazy",  (6, [(["jumps", "over", "the"], ["dog"])])),
-		("dog",   (7, [(["over", "the", "lazy"], [])]))
-	]
+type Corpus = (Tr.Trie (Int, [([B.ByteString], [B.ByteString])]), M.Map Int B.ByteString)
+addToCorpus :: Corpus -> B.ByteString -> [B.ByteString] -> [B.ByteString] -> Corpus
+-- the flip (,) is a bit ugly
+addToCorpus (orig, origmap) key prev next = liftFst (flip (Tr.insert key) orig) $ case Tr.lookup key orig of
+	Just val -> ((liftSnd ((prev, next):) val), origmap)
+	Nothing  -> ((Tr.size orig, [(prev, next)]), M.insert (Tr.size orig) key origmap)
+	where
+		liftFst x (a, b) = (x a, b)
+		liftSnd :: (a -> b) -> (c, a) -> (c, b)
+		liftSnd x (a, b) = (a, x b)
+emptyCorpus = (Tr.empty, M.empty)
+corpusFindWord :: Corpus -> B.ByteString -> (Int, [([B.ByteString], [B.ByteString])])
+corpusFindWord (a, amap) = fromJust . flip Tr.lookup a
+corpusFindIndex :: Corpus -> Int -> B.ByteString
+corpusFindIndex (_, amap) i = amap M.! i
 
+wordStuff = makeWordCorpus 3 $ map UTF8.fromString $ words "the quick brown fox jumps over the lazy dog"
+makeWordCorpus :: Int -> [B.ByteString] -> Corpus
+makeWordCorpus c tokens = makeWordCorpus' emptyCorpus [] tokens
+	where
+		makeWordCorpus' :: Corpus -> [B.ByteString] -> [B.ByteString] -> Corpus
+		makeWordCorpus' orig a ([b])  = addToCorpus orig b a []
+		makeWordCorpus' orig a (b:bl) = makeWordCorpus' newC ((keepLastN a c)++[b]) bl
+			where newC = (addToCorpus orig b a (take c bl))
+		keepLastN arr len = (drop ((length arr) - len + 1) arr)
 
 -- from stackoverflow
 lastN :: Int -> [a] -> [a]
 lastN n xs = foldl (const .drop 1) xs (drop n xs)
 
 -- convert a word list like above into shuffled pairs of training data
-wordPairs :: (RandomGen g) => M.Map String (Int, [([String], [String])]) -> Int -> Rand g [(Int, Int)]
+wordPairs :: (RandomGen g) => Corpus -> Int -> Rand g [(Int, Int)]
 wordPairs words c = 
-	concatMapM indivWordPairs words >>= shuffleM
+	concatMapM indivWordPairs (fst words) >>= shuffleM
 	where
 		indivWordPairs (i, inst)        = concatMapM (instWordPairs i) inst
 		instWordPairs i (before, after) = do
 			r <- getRandomR (1, c)
-			return $ map ((,) i . fst . (words M.!)) $ (lastN r before) ++ take r after
+			return $ map ((,) i . fst . (corpusFindWord words)) $ (lastN r before) ++ take r after
 		concatMapM f = liftM fold . T.mapM f
 
-runWords :: (RandomGen g) => M.Map String (Int, [([String], [String])]) -> Int -> M.Map Int DVec -> DMat -> Rand g (M.Map Int DVec, DMat)
+runWords :: (RandomGen g) => Corpus -> Int -> M.Map Int DVec -> DMat -> Rand g (M.Map Int DVec, DMat)
 runWords words c feat out = do
 	pairs <- wordPairs words c
 	foldM runWordPair (feat, out) pairs
@@ -135,11 +155,10 @@ runAllWords = do
 	putStrLn $ "complete: "
 	putStrLn $ "feature: " ++ (show $ M.toList ft_)
 	putStrLn $ "output:  " ++ (show $ ot_)
-	let v = runNetwork (ft_ M.! 0) ot_
+	let v = runNetwork (ft_ M.! 2) ot_
 	let outs = Mt.mapVectorWithIndex (\i _ -> softmax v i) v
 	putStrLn $ "full softmax output: " ++ (show $ map (printf "%.2f" :: Double->String) $ Mt.toList outs)
-	let wordmap = M.fromList $ map (\(w, (x, _)) -> (x, w)) (M.toList wordStuff)
-	a <- plot $ imap (\i x -> (wordmap M.! i, x Mt.@> 0, x Mt.@> 1) ) $ pca 2 ft_
+	a <- plot $ imap (\i x -> (UTF8.toString $ corpusFindIndex wordStuff i, x Mt.@> 0, x Mt.@> 1) ) $ pca 2 ft_
 	return ()
 	where iter (ft, ot) x = do
 		(ft2, ot2) <- evalRandIO $ runWords wordStuff 3 ft ot
