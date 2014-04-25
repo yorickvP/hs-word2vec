@@ -13,7 +13,6 @@ import Data.Maybe (catMaybes, listToMaybe, maybeToList, maybe)
 import Data.List (takeWhile, isInfixOf)
 import Data.Conduit (($$), ($$+-))
 import Data.Conduit.Binary (sinkFile)
-import Data.CaseInsensitive (CI)
 import qualified Data.CaseInsensitive as CI
 import Data.ByteString (ByteString)
 import Data.ByteString.Char8 (unpack, pack)

@@ -17,7 +17,6 @@
 -- another way to see this: each word has a feature vector,
 --  multiply this with the output weight matrix to get the output values
 -- softmax it based on the output word, and backprop it
--- XXX: derivations of softmax have a k parameter, what is this for?
 
 import System.Random
 import System.Random.Shuffle
