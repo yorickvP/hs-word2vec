@@ -19,26 +19,24 @@
 -- softmax it based on the output word, and backprop it
 
 import System.Random
-import System.Random.Shuffle
-import Control.Monad (forM_, foldM, liftM, replicateM)
-import Control.Monad.Random
+import Control.Monad (foldM, liftM, replicateM)
+import Control.Monad.Random (Rand, evalRandIO)
 import Debug.Trace
-import Data.List (foldl)
-import Data.Foldable (concatMap, fold)
 import Text.Printf
 import Data.String.Utils
-import Data.Maybe (fromJust, fromMaybe)
+import Control.DeepSeq
+
+import Data.List (foldl')
 import qualified Data.Packed.Matrix as Mt
 import qualified Data.Packed.Vector as Mt
 import qualified Numeric.LinearAlgebra as Mt
 import qualified Numeric.LinearAlgebra.Algorithms as Mt
-import qualified Data.Traversable as T
-import qualified Data.Map as M
+import Data.IntMap.Strict (IntMap)
+import qualified Data.IntMap.Strict as IM
 import System.Cmd (rawSystem)
 import System.Exit (ExitCode (ExitSuccess))
-import qualified Data.Trie as Tr
-import qualified Data.ByteString as B
 import qualified Data.ByteString.UTF8 as UTF8
+import qualified Corpus as Corpus
 
 type DVec = Mt.Vector Double
 type DMat = Mt.Matrix Double
@@ -73,102 +71,71 @@ runWord feature output expected = (newfeat, newout)
 	where
 		out = runNetwork feature output
 		softerr = 0 - (logsoftmax out expected)
-		-- calculate the delta-k for the output layer
+		-- calculate the delta for the output layer
 		-- the softmax can be seen as another layer on top of it with fixed weight 1
 		-- this means this is also the modified error of the output layer
+		-- delta_k = Err_k * g'(in_k)
 		moderr = Mt.mapVector (* softerr) $ Mt.buildVector (Mt.dim out) (logsoftmax' out expected)
 		-- calculate the weight adjustment between the output and projection
+		-- W_(j,k) := W_(j,k) + alpha * a_j * delta_k
 		newout = Mt.fromColumns $ imap processout $ Mt.toColumns output
 		processout k feat = Mt.zipVectorWith (adjustprojoutcon (moderr Mt.@> k)) feature feat
 		adjustprojoutcon d_k activation weight = weight + rate * d_k * activation
 		-- calculate the propagation deltas for the projection layer
-		delta_j = Mt.zipVectorWith (*) (Mt.fromList $ map Mt.sumElements $ Mt.toRows output) moderr
+		delta_j = output `Mt.mXv` moderr
 		-- calculate the new weights for the feature vector
-		newfeat = Mt.zipVectorWith (\w d -> w + rate * d) feature delta_j
+		newfeat = check_size feature delta_j $ Mt.zipVectorWith (\w d -> w + rate * d) feature delta_j
 		--output !! k ! j + rate * (feature ! j) * (moderr ! k)
 		rate = 0.005 :: Double
 		traceShowId a = trace (show a) a
+		check_size a b x = if (Mt.dim a /= Mt.dim b) then error "size doesn't match" else x
 
 
 randomNetwork :: Int -> Int -> IO (DMat, DMat)
 randomNetwork vocab dimen = do
-	alist <- replicateM (vocab * dimen) randomIO
-	blist <- replicateM (vocab * dimen) randomIO
-	return ((vocab Mt.>< dimen)alist, (dimen Mt.>< vocab)blist)
+	seeda <- randomIO :: IO Int
+	seedb <- randomIO :: IO Int
+	let a = Mt.randomVector seeda Mt.Uniform (vocab * dimen)
+	let b = Mt.randomVector seedb Mt.Uniform (vocab * dimen)
+	return (Mt.reshape dimen a, Mt.reshape vocab b)
 
-type Corpus = (Tr.Trie (Int, [([B.ByteString], [B.ByteString])]), M.Map Int B.ByteString)
-addToCorpus :: Corpus -> B.ByteString -> [B.ByteString] -> [B.ByteString] -> Corpus
--- the flip (,) is a bit ugly
-addToCorpus (orig, origmap) key prev next = liftFst (flip (Tr.insert key) orig) $ case Tr.lookup key orig of
-	Just val -> ((liftSnd ((prev, next):) val), origmap)
-	Nothing  -> ((Tr.size orig, [(prev, next)]), M.insert (Tr.size orig) key origmap)
+
+runWords :: (RandomGen g) => Corpus.Corpus -> IntMap DVec -> DMat -> Rand g (IntMap DVec, DMat)
+runWords words feat out = do
+	pairs <- Corpus.wordPairs words
+	return $! foldl' runWordPair (feat, out) pairs
 	where
-		liftFst x (a, b) = (x a, b)
-		liftSnd :: (a -> b) -> (c, a) -> (c, b)
-		liftSnd x (a, b) = (a, x b)
-emptyCorpus = (Tr.empty, M.empty)
-corpusFindWord :: Corpus -> B.ByteString -> (Int, [([B.ByteString], [B.ByteString])])
-corpusFindWord (a, amap) = fromJust . flip Tr.lookup a
-corpusFindIndex :: Corpus -> Int -> B.ByteString
-corpusFindIndex (_, amap) i = amap M.! i
+		runWordPair (f, o) (a, b) = (IM.insert a thisf f, newo)
+			where (thisf, newo) = runWord (f IM.! a) o b
 
-wordStuff = makeWordCorpus 3 $ map UTF8.fromString $ words "the quick brown fox jumps over the lazy dog"
-makeWordCorpus :: Int -> [B.ByteString] -> Corpus
-makeWordCorpus c tokens = makeWordCorpus' emptyCorpus [] tokens
-	where
-		makeWordCorpus' :: Corpus -> [B.ByteString] -> [B.ByteString] -> Corpus
-		makeWordCorpus' orig a ([b])  = addToCorpus orig b a []
-		makeWordCorpus' orig a (b:bl) = makeWordCorpus' newC ((keepLastN a c)++[b]) bl
-			where newC = (addToCorpus orig b a (take c bl))
-		keepLastN arr len = (drop ((length arr) - len + 1) arr)
-
--- from stackoverflow
-lastN :: Int -> [a] -> [a]
-lastN n xs = foldl (const .drop 1) xs (drop n xs)
-
--- convert a word list like above into shuffled pairs of training data
-wordPairs :: (RandomGen g) => Corpus -> Int -> Rand g [(Int, Int)]
-wordPairs words c = 
-	concatMapM indivWordPairs (fst words) >>= shuffleM
-	where
-		indivWordPairs (i, inst)        = concatMapM (instWordPairs i) inst
-		instWordPairs i (before, after) = do
-			r <- getRandomR (1, c)
-			return $ map ((,) i . fst . (corpusFindWord words)) $ (lastN r before) ++ take r after
-		concatMapM f = liftM fold . T.mapM f
-
-runWords :: (RandomGen g) => Corpus -> Int -> M.Map Int DVec -> DMat -> Rand g (M.Map Int DVec, DMat)
-runWords words c feat out = do
-	pairs <- wordPairs words c
-	foldM runWordPair (feat, out) pairs
-	where
-		runWordPair (f, o) (a, b) = do
-			let (thisf, newo) = runWord (f M.! a) o b
-			return (M.insert a thisf f, newo)
-
-runAllWords :: IO ()
-runAllWords = do
-	(feat, out) <- randomNetwork 8 7
-	let ft = M.fromAscList $ imap (,) (Mt.toRows feat)
+runAllWords :: Corpus.Corpus -> Int -> IO ()
+runAllWords wrds dimens = do
+	(feat, out) <- randomNetwork (Corpus.numWords wrds) dimens
+	let ft = IM.fromAscList $ imap (,) (Mt.toRows feat)
 	(ft_, ot_) <- iter (ft, out) 0
 	putStrLn $ "complete: "
-	putStrLn $ "feature: " ++ (show $ M.toList ft_)
-	putStrLn $ "output:  " ++ (show $ ot_)
-	let v = runNetwork (ft_ M.! 2) ot_
+	--putStrLn $ "feature: " ++ (show $ IM.toList ft_)
+	--putStrLn $ "output:  " ++ (show $ ot_)
+	let v = runNetwork (ft_ IM.! 2) ot_
 	let outs = Mt.mapVectorWithIndex (\i _ -> softmax v i) v
-	putStrLn $ "full softmax output: " ++ (show $ map (printf "%.2f" :: Double->String) $ Mt.toList outs)
-	a <- plot $ imap (\i x -> (UTF8.toString $ corpusFindIndex wordStuff i, x Mt.@> 0, x Mt.@> 1) ) $ pca 2 ft_
+	--putStrLn $ "full softmax output: " ++ (show $ map (printf "%.2f" :: Double->String) $ Mt.toList outs)
+	a <- plot $ imap (\i x -> (UTF8.toString $ Corpus.findIndex wrds i, x Mt.@> 0, x Mt.@> 1) ) $ pca 2 ft_
 	return ()
 	where iter (ft, ot) x = do
-		(ft2, ot2) <- evalRandIO $ runWords wordStuff 3 ft ot
-		putStrLn $ "iteration " ++ (show x) ++ " complete " ++ (show $ sum $ map Mt.sumElements $ map snd $ M.toList $ ft2)
-		let v = runNetwork (ft2 M.! 0) ot2
-		let outs = Mt.mapVectorWithIndex (\i _ -> softmax v i) v
-		putStrLn $ "full softmax output: " ++ (show $ map (printf "%.2f" :: Double->String) $ Mt.toList outs)
-		putStrLn $ "network output     : " ++ (show $ map (printf "%.2f" :: Double->String) $ Mt.toList v)
-		if x < 1000 then iter (ft2, ot2) (x + 1) else return (ft2, ot2)
+		(ft2, ot2) <- evalRandIO $ runWords wrds ft ot
+		putStrLn $ "iteration " ++ (show x) ++ " complete " ++ (show $ IM.size $ ft2)
+		--let v = runNetwork (ft2 IM.! 0) ot2
+		--et outs = Mt.mapVectorWithIndex (\i _ -> softmax v i) v
+		--putStrLn $ "full softmax output: " ++ (show $ map (printf "%.2f" :: Double->String) $ Mt.toList outs)
+		--putStrLn $ "network output     : " ++ (show $ map (printf "%.2f" :: Double->String) $ Mt.toList v)
+		if x < 2 then iter (ft2, ot2) (x + 1) else return (ft2, ot2)
 
-main = runAllWords
+main = do
+	crps <- Corpus.getFullCorpus
+	putStrLn $ "corpus loading complete " ++ (show $ Corpus.numWords crps)
+	a <- evalRandIO $ Corpus.wordPairs crps
+	runAllWords crps 110
+	return ()
 
 normalize_mean :: [Mt.Vector Double] -> [Mt.Vector Double]
 normalize_mean x = map (flip (-) mean) x where
@@ -181,13 +148,13 @@ eigenvectors :: Mt.Matrix Double -> [Mt.Vector Double]
 eigenvectors x = Mt.toColumns x where
 	(u, s, v) = Mt.svd x
 
-pca :: Int -> M.Map Int DVec -> [DVec]
+pca :: Int -> IntMap DVec -> [DVec]
 pca dims x = map (`Mt.vXm` base) dataset
 	where
 		base = Mt.fromColumns $ take dims $ eigenvectors $ covariance_matrix $ dataset
 		dataset = normalize_mean $ toVecArray x
-		toVecArray :: M.Map Int DVec -> [DVec]
-		toVecArray x = map snd $ M.toAscList x
+		toVecArray :: IntMap DVec -> [DVec]
+		toVecArray x = map snd $ IM.toAscList x
 
 -- loosely based on http://hackage.haskell.org/package/easyplot-1.0/docs/src/Graphics-EasyPlot.html#Plot
 plot :: (Show a, Num a) => [(String, a, a)] -> IO Bool
@@ -199,8 +166,8 @@ plot points = do
 		-- todo see if this works when haskell uses scientific notation
 		dataset = unlines $ map (\(s, a, b) -> s ++ " " ++ (show a) ++ " " ++ (show b)) points
 		args = ["-e", join ";" [
-				"set term png",
-				"set offsets 1,1,1,1",
+				"set term png size 1024,1024",
+				--"set offsets 1,1,1,1",
 				"set output \"pca.png\"",
 				"plot \"" ++ filename ++ "\" using 2:3:1 with labels title \"\""]]
 		filename = "plot1.dat"

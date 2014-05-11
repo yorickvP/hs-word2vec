@@ -1,16 +1,16 @@
-{-# LANGUAGE BangPatterns, TemplateHaskell #-}
---module Corpus (
---	Corpus
---  , empty
---  , findIndex
---  , addTokens
---  , wordPairs
---  , numWords
---)
---where
+{-# LANGUAGE BangPatterns #-}
+module Corpus (
+	Corpus
+  , empty
+  , findIndex
+  , addTokens
+  , wordPairs
+  , numWords
+  , getFullCorpus
+)
+where
 {- dependencies: random, containers, MonadRandom, random-shuffle,
-               unordered-containers,  bytestring,    utf8-string,
-                            deepseq,  deepseq-th                -}
+               unordered-containers,  bytestring,    utf8-string -}
 import System.Random
 import System.Random.Shuffle
 import Control.Monad (liftM)
@@ -57,14 +57,12 @@ type IndexWordMap = IntMap B.ByteString
 Now that we have these structures, let's put them into a datatype for easy use.
 Let's also include the training context size (how many words to look around every word),
 because it's really a property used to generate and use the corpus.
-Another thing that is useful to keep track of is the number of words, 
-because that's O(n) on the Trie -- (it actually is O(1) on the map, use that?)
+Another thing that is useful to keep track of is the number of words, because it's O(n)
+to find it from the datastructures
 TL;DR: the ints are C and size. C is word lookaround.
 -}
 data Corpus = Corpus !WordContextMap !IndexWordMap !Int !Int
 	deriving Show
--- Derive NF data so we can call deepseq (but should we?)
-$(deriveNFData ''Corpus)
 
 {-
 Let's start with the obvious operations and getters that we're gonna need.
@@ -90,7 +88,7 @@ So, first give every word an index, then iterate over them again to store the co
 -- addWord gives a word an index, and returns it
 addWord :: Corpus -> B.ByteString -> (Corpus, Int)
 addWord x@(Corpus orig origmap c size) key =
-	-- first check if the world is already in the trie
+	-- first check if the word is already present
 	case HM.lookup key orig of
 		-- if so, just return the index.
 		Just (i, _) -> (x, i)
@@ -151,27 +149,12 @@ lastN' n xs = foldl' (const .drop 1) xs (drop n xs)
 {-
 Finally, the function that converts the corpus datastructure into a shuffled list of training pairs.
 The alternative to using shuffleM would be implementing Fisher-Yates using ST, but I hope this is efficient enough.
-Traverse over the trie and concatmap it.
-This function currently runs out of memory, it seems.
-Iterating over the trie seems hard (using a lot of stackspace?), maybe iterating over the map
-would be better. Alternatively, I could iterate over the numbers,
-look them up in the map and look that up in the trie, but that feels inefficient.
 -}
 --concatM' :: (Monad m) => (a -> m [b]) -> HashMap x a -> m [b]
 concatM' f = fmap concat . mapM f . HM.elems
 wordPairs :: (RandomGen g) => Corpus -> Rand g [(Int, Int)]
---wordPairs (Corpus trie _ c _) = 
---	concatMapM indivWordPairs trie >>= shuffleM
---	where
---		indivWordPairs (i, inst)        = concatMapM (instWordPairs i) inst
---		instWordPairs i (before, after) = do
---			-- choose a random number r, up to c. take r words before and r words after.
---			-- this makes sure that closer words are sampled more often.
---			-- TODO: subsampling of frequent words.
---			r <- getRandomR (1, c)
---			return $ map ((,) i) $ (lastN' r before) ++ take r after
-wordPairs (Corpus trie _ c _) =
-	concatM' indivWordPairs trie >>= shuffleM
+wordPairs (Corpus ctxs _ c _) =
+	concatM' indivWordPairs ctxs >>= shuffleM
 	where
 		indivWordPairs (i, inst)        = concatMapM (instWordPairs i) inst
 		instWordPairs i (before, after) = do
@@ -181,10 +164,6 @@ wordPairs (Corpus trie _ c _) =
 			r <- getRandomR (1, c)
 			return $ map ((,) i) $ (lastN' r before) ++ take r after
 		concatMapM f = liftM fold . T.mapM f
--- a simple test function for iterating over a corpus
---test :: Corpus -> Int
---test (Corpus trie _ _ _) = sum' $ Tr.toListBy (\_ (_, a) -> length a) trie
---	where sum' = foldl' (+) 0
 
 -- read in everything from a corpus.txt file.
 -- like found on http://ospinio.yori.cc/corpus.txt
@@ -193,20 +172,3 @@ getFullCorpus = do
 	f <- readFile "corpus.txt"
 	let flines = map (map UTF8.fromString) $ map words $ lines f
 	return $! foldl' (\crps ln -> crps `seq` addTokens crps ln) (empty 3) flines
-test1 :: Corpus -> IO ()
-test1 crps = do
-	a <- evalRandIO $ wordPairs crps
-	putStrLn $ "word pair count: " ++ (show $ length a)
-test2 :: Corpus -> IO ()
-test2 crps = do
-	a <- evalRandIO $ wordPairs crps
-	putStrLn $ "word pair count: " ++ (show $ length a)
-
-main :: IO ()
-main = do
-	crps <- getFullCorpus
-	--putStrLn $ "word pair count: " ++ (show $ test crps)
-	putStrLn $ "corpus loading complete " ++ (show $ numWords crps)
-	test1 crps
-	test2 crps
-	-- a <- evalRandIO $ wordPairs crps

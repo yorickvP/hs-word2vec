@@ -67,6 +67,7 @@ executable scrape
                        hxt,
                        utf8-string,
                        conduit,
+                       conduit-extra,
                        MissingH,
                        directory
   
@@ -90,13 +91,16 @@ executable classify
   build-depends:       base >= 4.6 && <4.7,
                        random,
                        containers,
+                       unordered-containers,
                        MonadRandom,
                        random-shuffle,
                        MissingH,
                        hmatrix,
                        process,
-                       bytestring-trie,
                        bytestring,
-                       utf8-string
+                       utf8-string,
+                       deepseq,
+                       deepseq-th,
+                       mtl
   hs-source-dirs:      src
   default-language:    Haskell2010

@@ -15,6 +15,7 @@ goals:
     - use http://www.statmt.org/moses/?n=moses.baseline
     - keep named entities, dataset isn't likely to have a lot except for references
     - subsampling as in Mikholov.c?
+    - filter clusters(>1) of lines less than 30 characters long (except the first one coming after a long line)
 - distributed vector representation
   - use skipgrams
 - use PCA
