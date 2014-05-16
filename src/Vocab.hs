@@ -30,6 +30,7 @@ import Data.IntMap.Strict (IntMap)
 import qualified Data.IntMap.Strict as IM
 import Data.HashMap.Strict (HashMap)
 import qualified Data.HashMap.Strict as HM
+import qualified Data.PriorityQueue.FingerTree as PQ
 
 {-
 The corpus file is stored as a text file, where each line is a sentence.
@@ -70,9 +71,10 @@ Another thing that is useful to keep track of is the number of words, because it
 to find it from the datastructures
 -}
 
-data Vocab = Vocab { wordCounts :: !WordIdCounts
-                   , wordCount  :: !Int         -- total word count, sum of wordCounts
-                   , vocabWords :: !IndexWordMap }
+data Vocab = Vocab { wordCounts   :: !WordIdCounts
+                   , wordCount    :: !Int         -- total word count, sum of wordCounts
+                   , vocabWords   :: !IndexWordMap 
+               	   , vocabHuffman :: !VocabHuffman}
 
 
 
@@ -123,10 +125,11 @@ labelWords :: WordCounts -> WordIdCounts
 labelWords arr = evalSupply (T.mapM (\x -> do { i <- supply; return (i, x) }) arr) [0..]
 -- the int is the amount of times a word needs to occur before it's included
 makeVocab :: WordCounts -> Int -> Vocab
-makeVocab counts thresh = Vocab labelled (HM.foldl' (+) 0 newcounts) indices
+makeVocab counts thresh = Vocab labelled (HM.foldl' (+) 0 newcounts) indices tree
 	where
 		!newcounts = HM.filter (>= thresh) counts
 		!labelled = labelWords newcounts
+		!tree     = assignCodes (buildTree labelled) [] [] IM.empty
 		!indices = HM.foldlWithKey' (\o k (i, _) -> IM.insert i k o) IM.empty labelled
 
 uniqueWords :: Vocab -> Int
@@ -138,20 +141,20 @@ lineArr = map (toArray . C8.words) . UTF8.lines
 
 
 hasWord :: Vocab -> B.ByteString -> Bool
-hasWord (Vocab tr _ _) = isJust . (flip HM.lookup) tr
+hasWord v = isJust . (flip HM.lookup) (wordCounts v)
 
 wordIdx :: Vocab -> B.ByteString -> Int
-wordIdx (Vocab v _ _) = fst . (v HM.!)
+wordIdx v = fst . ((wordCounts v) HM.!)
 
 safeWordIdx :: Vocab -> B.ByteString -> Maybe Int
-safeWordIdx (Vocab v _ _) = fmap fst . (flip HM.lookup) v
+safeWordIdx v = fmap fst . (flip HM.lookup) (wordCounts v)
 
 -- exported
 findIndex :: Vocab -> Int -> B.ByteString
 findIndex vocab str = (vocabWords vocab) IM.! str
 
 wordFreq :: Vocab -> B.ByteString -> Float
-wordFreq (Vocab tr total _) x = ((fromIntegral count) / (fromIntegral total))
+wordFreq (Vocab tr total _ _) x = ((fromIntegral count) / (fromIntegral total))
 	where (_, count) = tr HM.! x
 
 subsample :: (RandomGen g) => Vocab -> B.ByteString -> Rand g Bool
@@ -165,3 +168,36 @@ doIteration vocab str ctx folder net = iterateWordContexts (lineArr str) ctx (sa
 	where
 		filt = subsample vocab
 		train a net b = folder net (a, wordIdx vocab b)
+
+data HuffmanTree a = Leaf Int a
+                   | Branch Int (HuffmanTree a) (HuffmanTree a) a
+                   deriving Show
+probMass :: HuffmanTree a -> Int
+probMass (Leaf x _) = x
+probMass (Branch x _ _ _) = x
+
+buildTree :: WordIdCounts -> HuffmanTree Int
+buildTree counts = evalSupply (build queue) [0..]
+	where
+		queue = PQ.fromList $ map (\(k,v) -> (v,Leaf k v)) (HM.elems counts)
+		build :: PQ.PQueue Int (HuffmanTree Int) -> Supply Int (HuffmanTree Int)
+		build x =
+			case PQ.minView x of
+				Just (v, x') ->
+					case PQ.minView x' of
+						Nothing -> return v
+						Just (v', x'') -> do
+							i <- supply
+							build (PQ.add pm (Branch pm v v' i) x'')
+							where pm = (probMass v) + (probMass v')
+type VocabHuffman = IM.IntMap ([Bool], [Int])
+assignCodes :: HuffmanTree Int -> [Bool] -> [Int] -> VocabHuffman -> VocabHuffman
+assignCodes node upperC upperI codes = case node of
+	Leaf count key     -> IM.insert key (upperC, upperI) codes
+	Branch count a b x ->
+		(assignCodes     a (False:upperC) (x:upperI)
+			(assignCodes b  (True:upperC) (x:upperI) codes))
+treeSize :: HuffmanTree a -> Int
+treeSize x = case x of
+	Leaf _ _ -> 0
+	Branch _ a b _ -> 1 + (treeSize a) + (treeSize b)

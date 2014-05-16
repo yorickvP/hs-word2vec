@@ -4,7 +4,6 @@ module NeuralNet (
   , featureVecArray
   , runWord
   , runNetwork
-  , softmax
   , forceEval
 )
 where
