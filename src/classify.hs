@@ -65,13 +65,13 @@ runAllWords vocab content dimens = do
 		--et outs = Mt.mapVectorWithIndex (\i _ -> softmax v i) v
 		--putStrLn $ "full softmax output: " ++ (show $ map (printf "%.2f" :: Double->String) $ Mt.toList outs)
 		--putStrLn $ "network output     : " ++ (show $ map (printf "%.2f" :: Double->String) $ Mt.toList v)
-		if x < 3 then iter vocab net2 (x + 1) else return net2
+		if x < 10 then iter vocab net2 (x + 1) else return net2
 
 main = do
 	crps <- B.readFile "corpus.txt"
 	let vocab = Vocab.makeVocab (Vocab.countWordFreqs $ C8.words crps) 2
 	putStrLn $ "Vocab loading complete " ++ (show $ Vocab.uniqueWords vocab)
-	runAllWords vocab crps 110
+	runAllWords vocab crps 150
 	return ()
 
 normalize_mean :: [Mt.Vector Double] -> [Mt.Vector Double]
