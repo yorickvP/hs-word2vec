@@ -22,8 +22,6 @@ import System.Random
 import Control.Monad (foldM, liftM, replicateM)
 import Control.Monad.Random (Rand, evalRandIO)
 import Debug.Trace
-import Text.Printf
-import Data.String.Utils
 
 import Data.List (foldl')
 import Data.Array.IArray
@@ -33,14 +31,14 @@ import qualified Numeric.LinearAlgebra as Mt
 import qualified Numeric.LinearAlgebra.Algorithms as Mt
 import Data.IntMap.Strict (IntMap)
 import qualified Data.IntMap.Strict as IM
-import System.Process (rawSystem)
-import System.Exit (ExitCode (ExitSuccess))
+
 import qualified Data.ByteString as B
 import qualified Data.ByteString.UTF8 as UTF8
 import qualified Data.ByteString.Char8 as C8
 import qualified Vocab as Vocab
-import qualified NeuralNet as NN
+import qualified HSNeuralNet as NN
 import Util
+import PCA (pca)
 
 type DVec = Mt.Vector Double
 type DMat = Mt.Matrix Double
@@ -52,57 +50,25 @@ runAllWords vocab content dimens = do
 	putStrLn $ "complete: "
 	--putStrLn $ "feature: " ++ (show $ IM.toList ft_)
 	--putStrLn $ "output:  " ++ (show $ ot_)
-	let v = NN.runNetwork net 2
+	-- let v = NN.runNetwork net 2
 	--let outs = Mt.mapVectorWithIndex (\i _ -> softmax v i) v
 	--putStrLn $ "full softmax output: " ++ (show $ map (printf "%.2f" :: Double->String) $ Mt.toList outs)
 	let features = NN.featureVecArray net_
 	a <- plot $ imap (\i x -> (UTF8.toString $ Vocab.findIndex vocab i, x Mt.@> 0, x Mt.@> 1) ) $ pca 2 features
 	return ()
 	where iter vocab net x = do
-		net2 <- evalRandIO $ Vocab.doIteration vocab content 5 NN.runWord net
+		net2 <- evalRandIO $ Vocab.doIteration vocab content 5 (0.025, 0.0001) NN.runWord net
 		putStrLn $ "iteration " ++ (show x) ++ " complete "  ++ (show $ NN.forceEval net2)
 		--let v = runNetwork (ft2 IM.! 0) ot2
 		--et outs = Mt.mapVectorWithIndex (\i _ -> softmax v i) v
 		--putStrLn $ "full softmax output: " ++ (show $ map (printf "%.2f" :: Double->String) $ Mt.toList outs)
 		--putStrLn $ "network output     : " ++ (show $ map (printf "%.2f" :: Double->String) $ Mt.toList v)
-		if x < 10 then iter vocab net2 (x + 1) else return net2
+		if x < 0 then iter vocab net2 (x + 1) else return net2
 
 main = do
 	crps <- B.readFile "corpus.txt"
-	let vocab = Vocab.makeVocab (Vocab.countWordFreqs $ C8.words crps) 2
+	let vocab = Vocab.makeVocab (Vocab.countWordFreqs $ C8.words crps) 5
 	putStrLn $ "Vocab loading complete " ++ (show $ Vocab.uniqueWords vocab)
-	runAllWords vocab crps 150
+	runAllWords vocab crps 100
 	return ()
 
-normalize_mean :: [Mt.Vector Double] -> [Mt.Vector Double]
-normalize_mean x = map (flip (-) mean) x where
-	mean = (sum x) / (fromIntegral $ length x)
-
-covariance_matrix :: [Mt.Vector Double] -> DMat
-covariance_matrix x = (sum $ map (\a -> (Mt.asColumn a) * (Mt.asRow a)) x) / (fromIntegral $ length x)
-
-eigenvectors :: Mt.Matrix Double -> [Mt.Vector Double]
-eigenvectors x = Mt.toColumns x where
-	(u, s, v) = Mt.svd x
-
-pca :: Int -> [DVec] -> [DVec]
-pca dims x = map (`Mt.vXm` base) dataset
-	where
-		base = Mt.fromColumns $ take dims $ eigenvectors $ covariance_matrix $ dataset
-		dataset = normalize_mean $ x
-
--- loosely based on http://hackage.haskell.org/package/easyplot-1.0/docs/src/Graphics-EasyPlot.html#Plot
-plot :: (Show a, Num a) => [(String, a, a)] -> IO Bool
-plot points = do
-	writeFile filename dataset
-	exitCode <- rawSystem "gnuplot" args
-	return $ exitCode == ExitSuccess
-	where 
-		-- todo see if this works when haskell uses scientific notation
-		dataset = unlines $ map (\(s, a, b) -> s ++ " " ++ (show a) ++ " " ++ (show b)) points
-		args = ["-e", join ";" [
-				"set term png size 1024,1024",
-				--"set offsets 1,1,1,1",
-				"set output \"pca.png\"",
-				"plot \"" ++ filename ++ "\" using 2:3:1 with labels title \"\""]]
-		filename = "plot1.dat"

@@ -33,7 +33,7 @@ runNetwork :: NeuralNet -> Int -> DVec
 runNetwork net@(NeuralNet _ output) wordIdx = (getFeat net wordIdx) `Mt.vXm` output
 
 -- exp(a_i) / sum(k)(exp(a_k))
--- use logsoftmax here?
+-- use logsumexp here?
 softmax :: DVec -> Int -> Double
 softmax a i = (expa Mt.@> i) / (Mt.sumElements expa)
 	where expa = Mt.mapVector exp $ a
@@ -51,8 +51,8 @@ logsoftmax' :: DVec -> Int -> Int -> Double
 logsoftmax' a i k = (softmax' a i k) / (softmax a i)
 
 
-runWord :: NeuralNet -> (Int, Int) -> NeuralNet
-runWord net@(NeuralNet _ output) (wordIdx, expected) = updateNet net wordIdx newfeat newout
+runWord :: NeuralNet -> (Int, Int, ([Bool], [Int])) -> NeuralNet
+runWord net@(NeuralNet _ output) (wordIdx, expected, _) = updateNet net wordIdx newfeat newout
 	where
 		feature = getFeat net wordIdx
 		out = runNetwork net wordIdx

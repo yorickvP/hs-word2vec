@@ -163,11 +163,15 @@ subsample vocab x = if not $ hasWord vocab x then return False else do
 	let freq = wordFreq vocab x
 	let prob = 1 - (sqrt (1e-5 / freq))
 	return $ prob >= (r :: Float)
-doIteration :: (RandomGen g) => Vocab -> B.ByteString -> Int -> (a -> (Int, Int) -> a) -> a -> Rand g a
-doIteration vocab str ctx folder net = iterateWordContexts (lineArr str) ctx (safeWordIdx vocab) filt train net
+doIteration :: (RandomGen g) => Vocab -> B.ByteString -> Int -> (Double, Double) ->
+				(a -> Double -> (Int, Int, ([Bool], [Int])) -> a) -> a -> Rand g a
+doIteration vocab str ctx (rateMax, rateMin) folder net =
+	iterateWordContexts (lineArr str) ctx (safeWordIdx vocab) filt train net
 	where
 		filt = subsample vocab
-		train a net b = folder net (a, wordIdx vocab b)
+		rateAdj :: Double
+		rateAdj = max rateMin $ rateMax / fromIntegral (wordCount vocab)
+		train a net b = folder net rateMax (a, wordIdx vocab b, (vocabHuffman vocab) IM.! a)
 
 data HuffmanTree a = Leaf Int a
                    | Branch Int (HuffmanTree a) (HuffmanTree a) a
@@ -179,7 +183,7 @@ probMass (Branch x _ _ _) = x
 buildTree :: WordIdCounts -> HuffmanTree Int
 buildTree counts = evalSupply (build queue) [0..]
 	where
-		queue = PQ.fromList $ map (\(k,v) -> (v,Leaf k v)) (HM.elems counts)
+		queue = PQ.fromList $ map (\(k,v) -> (v,Leaf v k)) (HM.elems counts)
 		build :: PQ.PQueue Int (HuffmanTree Int) -> Supply Int (HuffmanTree Int)
 		build x =
 			case PQ.minView x of
