@@ -6,6 +6,7 @@ module Vocab (
   , makeVocab
   , uniqueWords
   , findIndex
+  , sortedVecList
   , Vocab
 )
 where
@@ -205,3 +206,15 @@ treeSize :: HuffmanTree a -> Int
 treeSize x = case x of
 	Leaf _ _ -> 0
 	Branch _ a b _ -> 1 + (treeSize a) + (treeSize b)
+
+-- todo: other sort
+sortedWIDList :: WordIdCounts -> (Int -> a) -> [(B.ByteString, a)]
+sortedWIDList counts mapper = reverse $ pqtolist queue
+	where
+		queue = PQ.fromList $ map (\(k, (i, c)) -> (c, (k, mapper i))) $ HM.toList counts
+		pqtolist :: PQ.PQueue Int (B.ByteString, b) -> [(B.ByteString, b)]
+		pqtolist q = case PQ.minView q of
+			Just (v, x') -> v : pqtolist x'
+			Nothing -> []
+
+sortedVecList = sortedWIDList . wordCounts

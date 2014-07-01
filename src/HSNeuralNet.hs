@@ -3,6 +3,7 @@ module HSNeuralNet (
   , randomNetwork
   , featureVecArray
   , runWord
+  , getFeat
   , forceEval
 )
 where
@@ -47,21 +48,32 @@ sigmoid x = 1.0 / (1.0 + (exp (- x)))
     --    l2 += g * l1
     --l1 += neu1e
 
+-- we are optimizing
+-- sum(words) sum(context) log exp sum(parents)(log sigmoid (code?1:-1) * (l1 . point))
+-- the log/exp cancel out, so we can individually optimize log sigmoid(code?1:-1)*(l1.point)
+-- for every code. huffman trees are useful because they minimize the calculations
+-- (hierarchical softmax works with any kind of binary tree). huffman trees assign shorter
+-- codes to more frequent words, so less calculations needed on a whole.
+-- so calculate logsigmoid for every code and point
+-- derivative of logsigmoid(1 * x) = 1 - sigmoid(x) (or sigmoid(-x))
+-- derivative of logsigmoid(-1 * x) = 0 - sigmoid(x) (or -sigmoid(x))
+
 -- foldl [(Bool, Int)] -> NeuralNet -> (neu1e, NeuralNet)
 singleIter :: Double -> DVec -> (DVec, IntMap DVec) -> (Bool, Int) -> (DVec, IntMap DVec)
 singleIter rate l1 (neu1e, output) (c, p) = (neu1e', output')
 	where
 		l2 = output IM.! p
 		f  = sigmoid (Mt.dot l1 l2)
+		-- g = logsigmoid'(l1 . l2) * rate
 		g  = (1.0 - (bool2int c) - f) * rate
 		neu1e' = Mt.add (Mt.scale g l2) neu1e
-		output' = IM.insert p (Mt.scale g l1) output
+		output' = IM.insert p ((output IM.! p) + (Mt.scale g l1)) output
 		bool2int True = 1.0
 		bool2int False = 0.0
 
 runWord :: NeuralNet -> Double -> (Int, Int, ([Bool], [Int])) -> NeuralNet
 runWord net@(NeuralNet _ output) rate (wordIdx, expected, (upperC, upperI)) =
-	updateNet net wordIdx newfeat newout
+	updateNet net expected newfeat newout
 	where
 		l1 = getFeat net expected
 		neu1e = Mt.constant 0.0 (Mt.dim l1)

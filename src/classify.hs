@@ -23,7 +23,7 @@ import Control.Monad (foldM, liftM, replicateM)
 import Control.Monad.Random (Rand, evalRandIO)
 import Debug.Trace
 
-import Data.List (foldl')
+import Data.List (foldl', intersperse)
 import Data.Array.IArray
 import qualified Data.Packed.Matrix as Mt
 import qualified Data.Packed.Vector as Mt
@@ -35,6 +35,7 @@ import qualified Data.IntMap.Strict as IM
 import qualified Data.ByteString as B
 import qualified Data.ByteString.UTF8 as UTF8
 import qualified Data.ByteString.Char8 as C8
+import qualified Data.ByteString.Lazy as L
 import qualified Vocab as Vocab
 import qualified HSNeuralNet as NN
 import Util
@@ -53,7 +54,11 @@ runAllWords vocab content dimens = do
 	-- let v = NN.runNetwork net 2
 	--let outs = Mt.mapVectorWithIndex (\i _ -> softmax v i) v
 	--putStrLn $ "full softmax output: " ++ (show $ map (printf "%.2f" :: Double->String) $ Mt.toList outs)
+	let l = Vocab.sortedVecList vocab (NN.getFeat net_)
 	let features = NN.featureVecArray net_
+	L.writeFile "outwords.txt" (L.fromChunks $ intersperse (C8.pack "\n") $
+		(C8.pack $ unwords $ map show [Vocab.uniqueWords vocab,dimens]) : 
+		map (\(b, vecs) -> C8.unwords $ b : (map (C8.pack . show) $ Mt.toList vecs)) l)
 	a <- plot $ imap (\i x -> (UTF8.toString $ Vocab.findIndex vocab i, x Mt.@> 0, x Mt.@> 1) ) $ pca 2 features
 	return ()
 	where iter vocab net x = do
