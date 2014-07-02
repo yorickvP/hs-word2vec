@@ -80,32 +80,33 @@ data Vocab = Vocab { wordCounts   :: !WordIdCounts
 
 
 iterateWordContexts :: (RandomGen g) =>
-	[Array Int B.ByteString] -> Int -> (B.ByteString -> Maybe b) -> (B.ByteString -> Rand g Bool) -> (b -> a -> B.ByteString -> a) -> a -> Rand g a
-iterateWordContexts (arr:xs) ctx primary_filter filt folder start = do
+	[Array Int B.ByteString] -> Int -> Int -> (B.ByteString -> Maybe b) -> (B.ByteString -> Rand g Bool) -> (Int -> b -> a -> B.ByteString -> a) -> a -> Rand g a
+iterateWordContexts (arr:xs) ctx iterationcount primary_filter filt folder start = do
 	-- iterate over array
-	r <- getRandomR (1, ctx)
-	result <- foldM (idxfold r) start $ indices arr
+	--r <- getRandomR (1, ctx)
+	(iterationcount', result) <- foldM (idxfold) (iterationcount, start) $ indices arr
 	-- get result
-	iterateWordContexts xs ctx primary_filter filt folder result
+	iterateWordContexts xs ctx iterationcount' primary_filter filt folder result
 	where
 		-- need scoped type variables
-		-- idxfold :: (RandomGen g) => a -> Int -> Rand g a
-		idxfold lookaround strt idx = do
+		-- idxfold :: (RandomGen g) => (Int, a) -> Int -> Rand g (Int, a)
+		idxfold (iterationcount, strt) idx = do
+			lookaround <- getRandomR (1, ctx)
 			let (lower, upper) = bounds arr
 			case primary_filter (arr ! idx) of
-				Nothing   -> return strt
+				Nothing   -> return (iterationcount + 1,  strt)
 				Just word -> do
-					before <- wrds (enumFromThenTo (idx - 1) (idx - 2) lower)
-					after  <- wrds (enumFromThenTo (idx + 1) (idx + 2) upper)
-					let strt' = foldl' (folder word) strt before
-					return    $ foldl' (folder word) strt' after
+					before <- wrds lookaround (enumFromThenTo (idx - 1) (idx - 2) lower)
+					after  <- wrds lookaround (enumFromThenTo (idx + 1) (idx + 2) upper)
+					let strt' = foldl' (folder iterationcount word) strt before
+					return    $ (iterationcount + 1, foldl' (folder iterationcount word) strt' after)
 			where
 				--wrds :: (RandomGen g) => [Int] -> Rand g [B.ByteString]
-				wrds x = takeNfiltM x (\i -> do
+				wrds lookaround x = takeNfiltM x (\i -> do
 						let s = arr ! i
 						out <- filt s
 						return (if out then Just s else Nothing)) lookaround
-iterateWordContexts [] _ _ _ _ start = return start
+iterateWordContexts [] _ _ _ _ _ start = return start
 
 -- helper function, something like (take n $ catMaybes $ map pred xs), but monadically
 -- without evaluating any unneeded results, like mapM would.
@@ -167,12 +168,12 @@ subsample vocab x = if not $ hasWord vocab x then return False else do
 doIteration :: (RandomGen g) => Vocab -> B.ByteString -> Int -> (Double, Double) ->
 				(a -> Double -> (Int, Int, ([Bool], [Int])) -> a) -> a -> Rand g a
 doIteration vocab str ctx (rateMax, rateMin) folder net =
-	iterateWordContexts (lineArr str) ctx (safeWordIdx vocab) filt train net
+	iterateWordContexts (lineArr str) ctx 0 (safeWordIdx vocab) filt train net
 	where
 		filt = subsample vocab
-		rateAdj :: Double
-		rateAdj = max rateMin $ rateMax / fromIntegral (wordCount vocab)
-		train a net b = folder net rateMax (a, wordIdx vocab b, (vocabHuffman vocab) IM.! a)
+		rateAdj :: Int -> Double
+		rateAdj itcount = max rateMin $ rateMax * (1.0 - ((fromIntegral itcount) / (1.0 + fromIntegral (wordCount vocab))))
+		train itcount a net b = folder net (rateAdj itcount) (a, wordIdx vocab b, (vocabHuffman vocab) IM.! a)
 
 data HuffmanTree a = Leaf Int a
                    | Branch Int (HuffmanTree a) (HuffmanTree a) a
