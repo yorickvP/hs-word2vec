@@ -18,62 +18,52 @@
 --  multiply this with the output weight matrix to get the output values
 -- softmax it based on the output word, and backprop it
 
-import System.Random
-import Control.Monad (foldM, liftM, replicateM)
-import Control.Monad.Random (Rand, evalRandIO)
-import Debug.Trace
+import Control.Monad.Random (evalRandIO)
 
-import Data.List (foldl', intersperse)
-import Data.Array.IArray
-import qualified Data.Packed.Matrix as Mt
+import Data.List (intersperse)
 import qualified Data.Packed.Vector as Mt
-import qualified Numeric.LinearAlgebra as Mt
-import qualified Numeric.LinearAlgebra.Algorithms as Mt
-import Data.IntMap.Strict (IntMap)
-import qualified Data.IntMap.Strict as IM
 
 import qualified Data.ByteString as B
-import qualified Data.ByteString.UTF8 as UTF8
 import qualified Data.ByteString.Char8 as C8
 import qualified Data.ByteString.Lazy as L
 import qualified Vocab as Vocab
 import qualified HSNeuralNet as NN
-import Util
-import PCA (pca)
 
-type DVec = Mt.Vector Double
-type DMat = Mt.Matrix Double
 
 runAllWords :: Vocab.Vocab -> B.ByteString -> Int -> IO ()
 runAllWords vocab content dimens = do
 	net  <- NN.randomNetwork (Vocab.uniqueWords vocab) dimens
-	net_ <- iter vocab net 0
-	putStrLn $ "complete: "
-	--putStrLn $ "feature: " ++ (show $ IM.toList ft_)
-	--putStrLn $ "output:  " ++ (show $ ot_)
-	-- let v = NN.runNetwork net 2
-	--let outs = Mt.mapVectorWithIndex (\i _ -> softmax v i) v
-	--putStrLn $ "full softmax output: " ++ (show $ map (printf "%.2f" :: Double->String) $ Mt.toList outs)
-	let l = Vocab.sortedVecList vocab (NN.getFeat net_)
-	let features = NN.featureVecArray net_
-	L.writeFile "outwords.txt" (L.fromChunks $ intersperse (C8.pack "\n") $
+	net_ <- wordsIteration net
+	putStrLn "training complete, writing to outwords.txt"
+	let sorted_vocab = Vocab.sortedVecList vocab (NN.getFeat net_)
+	L.writeFile "outwords.txt" (
+		-- bytestring unlines
+		L.fromChunks $ intersperse (C8.pack "\n") $
+		-- first line: number of words + number of dimensions
 		(C8.pack $ unwords $ map show [Vocab.uniqueWords vocab,dimens]) : 
-		map (\(b, vecs) -> C8.unwords $ b : (map (C8.pack . show) $ Mt.toList vecs)) l)
-	a <- plot $ imap (\i x -> (UTF8.toString $ Vocab.findIndex vocab i, x Mt.@> 0, x Mt.@> 1) ) $ pca 2 features
+		-- other lines: word vec vec vec vec
+		map (C8.unwords . (\(b, vecs) -> b : (map (C8.pack . show) $ Mt.toList vecs))) sorted_vocab)
 	return ()
-	where iter vocab net x = do
-		net2 <- evalRandIO $ Vocab.doIteration vocab content 5 (0.025, 0.0001) NN.runWord net
-		putStrLn $ "iteration " ++ (show x) ++ " complete "  ++ (show $ NN.forceEval net2)
-		--let v = runNetwork (ft2 IM.! 0) ot2
-		--et outs = Mt.mapVectorWithIndex (\i _ -> softmax v i) v
-		--putStrLn $ "full softmax output: " ++ (show $ map (printf "%.2f" :: Double->String) $ Mt.toList outs)
-		--putStrLn $ "network output     : " ++ (show $ map (printf "%.2f" :: Double->String) $ Mt.toList v)
-		if x < 0 then iter vocab net2 (x + 1) else return net2
+	where
+		wordsIteration :: NN.NeuralNet -> IO NN.NeuralNet
+		wordsIteration net = do
+			let itercount = 1 :: Int
+			-- fold NN.runWord over all the training pairs
+			-- max lookaround: 5, maxrate: 0.025, minrate: 0.0001
+			net2 <- evalRandIO $ Vocab.doIteration vocab content 5 (0.025, 0.0001) NN.runWord net
+			putStrLn $ "iteration " ++ (show itercount) ++ " complete "  ++ (show $ NN.forceEval net2)
+			return net2
+			-- possibly run this multiple times, not needed
+			--if itercount < 10 then wordsIteration vocab net2 (itercount + 1) else return net2
 
+main :: IO ()
 main = do
 	crps <- B.readFile "corpus.txt"
+	-- only use words that occur more than 5 times
 	let vocab = Vocab.makeVocab (Vocab.countWordFreqs $ C8.words crps) 5
-	putStrLn $ "Vocab loading complete " ++ (show $ Vocab.uniqueWords vocab)
+	putStrLn $ "Vocab loading complete: " ++
+		(show $ Vocab.wordCount vocab) ++ " total words, "
+		++ (show $ Vocab.uniqueWords vocab) ++ " unique words"
+	-- 100-dimensional vectors
 	runAllWords vocab crps 100
-	return ()
 

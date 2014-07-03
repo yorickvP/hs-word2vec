@@ -49,6 +49,7 @@ cabal-version:       >=1.10
 executable scrape
   -- .hs or .lhs file containing the Main module.
   main-is:             scrape.hs
+  ghc-options: -Wall
   
   -- Modules included in this executable, other than Main.
   -- other-modules:       
@@ -79,6 +80,7 @@ executable scrape
 
 executable makeCorpus
   main-is:             makeCorpus.hs
+  ghc-options: -Wall
   build-depends:       base >= 4.7 && <4.8,
                        process,
                        MissingH,
@@ -88,6 +90,7 @@ executable makeCorpus
 
 executable classify
   main-is:             classify.hs
+  ghc-options: -Wall
   build-depends:       base >= 4.7 && <4.8,
                        random,
                        containers,
@@ -108,6 +111,7 @@ executable classify
 
 executable plot_word2vec
   main-is:             plot_word2vec.hs
+  ghc-options: -Wall
   build-depends:       base >= 4.7 && <4.8,
                        MissingH,
                        hmatrix,

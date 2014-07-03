@@ -4,24 +4,23 @@ module Vocab (
   , lineArr
   , doIteration
   , makeVocab
+  , wordCount
   , uniqueWords
   , findIndex
   , sortedVecList
+  , WordDesc (..)
   , Vocab
 )
 where
 
 import System.Random
-import System.Random.Shuffle
 import Control.Monad (liftM, foldM)
 import Data.Maybe (isJust)
 import Control.Monad.Supply
 import Control.Monad.Random
 import Data.Array.IArray
-import Debug.Trace
 
-import Data.Foldable (concatMap, fold)
-import Data.List (foldl', mapAccumL)
+import Data.List (foldl')
 import qualified Data.Traversable as T
 
 import qualified Data.ByteString as B
@@ -57,8 +56,10 @@ around 2-5) have to be filtered out first.
 This is why we have a datastructure storing just the word counts, and one that also
 countains a label.
 -}
-type WordCounts   = HashMap B.ByteString Int
-type WordIdCounts = HashMap B.ByteString (Int, Int)
+type WordIdx      = Int
+type WordCount    = Int
+type WordCounts   = HashMap B.ByteString WordCount
+type WordIdCounts = HashMap B.ByteString (WordIdx, WordCount)
 {-
 Then, we need a datastructure to map the indices back to words,
 so that we can make nice graphs later on.
@@ -73,14 +74,17 @@ to find it from the datastructures
 -}
 
 data Vocab = Vocab { wordCounts   :: !WordIdCounts
-                   , wordCount    :: !Int         -- total word count, sum of wordCounts
+                   , wordCount    :: !WordCount       -- total word count, sum of wordCounts
                    , vocabWords   :: !IndexWordMap 
                	   , vocabHuffman :: !VocabHuffman}
 
-
+type TreeIdx = Int
+type BinTreeLocation = [(Bool, TreeIdx)]
+data WordDesc = WordDesc WordIdx BinTreeLocation
 
 iterateWordContexts :: (RandomGen g) =>
-	[Array Int B.ByteString] -> Int -> Int -> (B.ByteString -> Maybe b) -> (B.ByteString -> Rand g Bool) -> (Int -> b -> a -> B.ByteString -> a) -> a -> Rand g a
+	[Array Int B.ByteString] -> Int -> Int -> (B.ByteString -> Maybe b) -> (B.ByteString -> Rand g Bool)
+	 -> (Int -> b -> a -> B.ByteString -> a) -> a -> Rand g a
 iterateWordContexts (arr:xs) ctx iterationcount primary_filter filt folder start = do
 	-- iterate over array
 	--r <- getRandomR (1, ctx)
@@ -94,14 +98,14 @@ iterateWordContexts (arr:xs) ctx iterationcount primary_filter filt folder start
 			lookaround <- getRandomR (1, ctx)
 			let (lower, upper) = bounds arr
 			case primary_filter (arr ! idx) of
-				Nothing   -> return (iterationcount + 1,  strt)
+				Nothing   -> return (iterationcount,  strt) -- should this be + 1?
 				Just word -> do
 					before <- wrds lookaround (enumFromThenTo (idx - 1) (idx - 2) lower)
 					after  <- wrds lookaround (enumFromThenTo (idx + 1) (idx + 2) upper)
 					let strt' = foldl' (folder iterationcount word) strt before
 					return    $ (iterationcount + 1, foldl' (folder iterationcount word) strt' after)
 			where
-				--wrds :: (RandomGen g) => [Int] -> Rand g [B.ByteString]
+				--wrds :: (RandomGen g) => Int -> [Int] -> Rand g [B.ByteString]
 				wrds lookaround x = takeNfiltM x (\i -> do
 						let s = arr ! i
 						out <- filt s
@@ -126,15 +130,15 @@ countWordFreqs = foldl' (flip (flip (HM.insertWith (+)) 1)) HM.empty
 labelWords :: WordCounts -> WordIdCounts
 labelWords arr = evalSupply (T.mapM (\x -> do { i <- supply; return (i, x) }) arr) [0..]
 -- the int is the amount of times a word needs to occur before it's included
-makeVocab :: WordCounts -> Int -> Vocab
+makeVocab :: WordCounts -> WordCount -> Vocab
 makeVocab counts thresh = Vocab labelled (HM.foldl' (+) 0 newcounts) indices tree
 	where
 		!newcounts = HM.filter (>= thresh) counts
 		!labelled = labelWords newcounts
-		!tree     = assignCodes (buildTree labelled) [] [] IM.empty
+		!tree     = assignCodes (buildTree labelled) [] IM.empty
 		!indices = HM.foldlWithKey' (\o k (i, _) -> IM.insert i k o) IM.empty labelled
 
-uniqueWords :: Vocab -> Int
+uniqueWords :: Vocab -> WordCount
 uniqueWords = HM.size . wordCounts
 
 lineArr :: B.ByteString -> [Array Int B.ByteString]
@@ -145,14 +149,14 @@ lineArr = map (toArray . C8.words) . UTF8.lines
 hasWord :: Vocab -> B.ByteString -> Bool
 hasWord v = isJust . (flip HM.lookup) (wordCounts v)
 
-wordIdx :: Vocab -> B.ByteString -> Int
+wordIdx :: Vocab -> B.ByteString -> WordIdx
 wordIdx v = fst . ((wordCounts v) HM.!)
 
-safeWordIdx :: Vocab -> B.ByteString -> Maybe Int
+safeWordIdx :: Vocab -> B.ByteString -> Maybe WordIdx
 safeWordIdx v = fmap fst . (flip HM.lookup) (wordCounts v)
 
 -- exported
-findIndex :: Vocab -> Int -> B.ByteString
+findIndex :: Vocab -> WordIdx -> B.ByteString
 findIndex vocab str = (vocabWords vocab) IM.! str
 
 wordFreq :: Vocab -> B.ByteString -> Float
@@ -165,28 +169,35 @@ subsample vocab x = if not $ hasWord vocab x then return False else do
 	let freq = wordFreq vocab x
 	let prob = 1 - (sqrt (1e-5 / freq))
 	return $ prob >= (r :: Float)
+
+getWordDesc :: Vocab -> WordIdx -> WordDesc
+getWordDesc vocab x = WordDesc x $ (vocabHuffman vocab) IM.! x
+
 doIteration :: (RandomGen g) => Vocab -> B.ByteString -> Int -> (Double, Double) ->
-				(a -> Double -> (Int, Int, ([Bool], [Int])) -> a) -> a -> Rand g a
+				(a -> Double -> (WordDesc, WordDesc) -> a) -> a -> Rand g a
 doIteration vocab str ctx (rateMax, rateMin) folder net =
 	iterateWordContexts (lineArr str) ctx 0 (safeWordIdx vocab) filt train net
 	where
-		filt = subsample vocab
+		filt = return . hasWord vocab --subsample vocab
 		rateAdj :: Int -> Double
 		rateAdj itcount = max rateMin $ rateMax * (1.0 - ((fromIntegral itcount) / (1.0 + fromIntegral (wordCount vocab))))
-		train itcount a net b = folder net (rateAdj itcount) (a, wordIdx vocab b, (vocabHuffman vocab) IM.! a)
+		train itcount a net b = folder net (rateAdj itcount)
+								  (getWordDesc vocab a, getWordDesc vocab $ wordIdx vocab b)
 
-data HuffmanTree a = Leaf Int a
-                   | Branch Int (HuffmanTree a) (HuffmanTree a) a
+
+data HuffmanTree a = Leaf WordCount a
+                   | Branch WordCount (HuffmanTree a) (HuffmanTree a) a
                    deriving Show
-probMass :: HuffmanTree a -> Int
+type IndexedTree = HuffmanTree TreeIdx
+probMass :: HuffmanTree a -> WordCount
 probMass (Leaf x _) = x
 probMass (Branch x _ _ _) = x
 
-buildTree :: WordIdCounts -> HuffmanTree Int
+buildTree :: WordIdCounts -> IndexedTree
 buildTree counts = evalSupply (build queue) [0..]
 	where
 		queue = PQ.fromList $ map (\(k,v) -> (v,Leaf v k)) (HM.elems counts)
-		build :: PQ.PQueue Int (HuffmanTree Int) -> Supply Int (HuffmanTree Int)
+		build :: PQ.PQueue WordCount IndexedTree -> Supply TreeIdx IndexedTree
 		build x =
 			case PQ.minView x of
 				Just (v, x') ->
@@ -196,20 +207,17 @@ buildTree counts = evalSupply (build queue) [0..]
 							i <- supply
 							build (PQ.add pm (Branch pm v v' i) x'')
 							where pm = (probMass v) + (probMass v')
-type VocabHuffman = IM.IntMap ([Bool], [Int])
-assignCodes :: HuffmanTree Int -> [Bool] -> [Int] -> VocabHuffman -> VocabHuffman
-assignCodes node upperC upperI codes = case node of
-	Leaf count key     -> IM.insert key (upperC, upperI) codes
-	Branch count a b x ->
-		(assignCodes     a (False:upperC) (x:upperI)
-			(assignCodes b  (True:upperC) (x:upperI) codes))
-treeSize :: HuffmanTree a -> Int
-treeSize x = case x of
-	Leaf _ _ -> 0
-	Branch _ a b _ -> 1 + (treeSize a) + (treeSize b)
+type VocabHuffman = IM.IntMap BinTreeLocation
+assignCodes :: IndexedTree -> BinTreeLocation -> VocabHuffman -> VocabHuffman
+assignCodes node upper codes = case node of
+	Leaf   _ key     -> IM.insert key upper codes
+	Branch _ a b x ->
+		(assignCodes     a ((False, x):upper)
+			(assignCodes b ((True,  x):upper) codes))
+
 
 -- todo: other sort
-sortedWIDList :: WordIdCounts -> (Int -> a) -> [(B.ByteString, a)]
+sortedWIDList :: WordIdCounts -> (WordIdx -> a) -> [(B.ByteString, a)]
 sortedWIDList counts mapper = reverse $ pqtolist queue
 	where
 		queue = PQ.fromList $ map (\(k, (i, c)) -> (c, (k, mapper i))) $ HM.toList counts
@@ -218,4 +226,5 @@ sortedWIDList counts mapper = reverse $ pqtolist queue
 			Just (v, x') -> v : pqtolist x'
 			Nothing -> []
 
+sortedVecList :: Vocab -> (WordIdx -> a) -> [(B.ByteString, a)]
 sortedVecList = sortedWIDList . wordCounts
