@@ -12,8 +12,8 @@ import System.Random
 import qualified Data.Packed.Matrix as Mt
 import qualified Data.Packed.Vector as Mt
 import qualified Numeric.LinearAlgebra as Mt
-import Data.IntMap.Strict (IntMap)
-import qualified Data.IntMap.Strict as IM
+import Numeric.LinearAlgebra (dot, scale)
+import Data.IntMap.Strict (IntMap, (!), insert, fromAscList, size, toAscList)
 import Data.List (foldl')
 import Vocab (WordDesc (..), TrainProgress (..))
 import Util
@@ -30,12 +30,12 @@ data NeuralNet = NeuralNet !(IntMap Features) !(OutLayer)
 -- (exported) getFeat gets a feature vector for a specific word index
 -- this is also used to output the word data
 getFeat :: NeuralNet -> Int -> Features
-getFeat (NeuralNet x _) i = x IM.! i
+getFeat (NeuralNet x _) i = x ! i
 -- and this is a common case, too, a single new feature vector
 -- and an updated set of output vectors
 updateNet :: NeuralNet -> Int -> Features -> (OutLayer) -> NeuralNet
 updateNet (NeuralNet x _) idx val out =
-	NeuralNet (IM.insert idx val x) out
+	NeuralNet (insert idx val x) out
 
 sigmoid :: Double -> Double
 sigmoid x = 1.0 / (1.0 + (exp (- x)))
@@ -58,16 +58,14 @@ rateAdj (TrainProgress itcount total) =
 
 -- foldl [(Bool, Int)] -> NeuralNet -> (neu1e, NeuralNet)
 singleIter :: Double -> Features -> (DVec, OutLayer) -> (Bool, Int) -> (DVec, OutLayer)
-singleIter rate l1 (neu1e, output) (c, p) =
-	if (abs f >= 6) then (neu1e, output) else (neu1e', output')
+singleIter rate l1 (neu1e, output) (c, p) = (neu1e', output')
 	where
-		l2      = output IM.! p
-		f       = l1 `Mt.dot` l2
-		f'       = sigmoid (l1 `Mt.dot` l2)
-		--   g  = logsigmoid'(l1 `dot` l2) * rate
-		g       = (1.0 - (fromIntegral $ fromEnum c) - f') * rate
-		neu1e'  = neu1e + (g `Mt.scale` l2)
-		output' = IM.insert p ((output IM.! p) + (g `Mt.scale` l1)) output
+		l2      = output ! p
+		f       = sigmoid (l1 `dot` l2)
+		--   g  = logsigmoid_c'(l1 `dot` l2) * rate
+		g       = (1.0 - (fromIntegral $ fromEnum c) - f) * rate
+		neu1e'  = neu1e + (g `scale` l2)
+		output' = insert p (l2 + (g `scale` l1)) output
 
 -- use a word pair (and label/place in the tree of the word we're looking around)
 runWord :: NeuralNet -> TrainProgress -> (WordDesc, WordDesc) -> NeuralNet
@@ -78,7 +76,7 @@ runWord net@(NeuralNet _ output) progress (WordDesc _ treepos, WordDesc expected
 		l1               = getFeat net expected
 		neu1e            = Mt.constant 0.0 (Mt.dim l1)
 		(neu1e', newout) = foldl' (singleIter rate l1) (neu1e, output) treepos
-		newfeat          = Mt.add l1 neu1e'
+		newfeat          = l1 + neu1e'
 
 
 randomNetwork :: Int -> Int -> IO NeuralNet
@@ -87,13 +85,13 @@ randomNetwork vocab dimen = do
 	let a = Mt.randomVector seeda Mt.Uniform (vocab * dimen)
 	let a' = a / (fromIntegral dimen)
 	let b = Mt.constant 0.0 (vocab * dimen) :: DVec
-	let ft = IM.fromAscList $ imap (,) (Mt.toRows $ Mt.reshape dimen a')
-	let ot = IM.fromAscList $ imap (,) (Mt.toRows $ Mt.reshape dimen b)
+	let ft = fromAscList $ imap (,) (Mt.toRows $ Mt.reshape dimen a')
+	let ot = fromAscList $ imap (,) (Mt.toRows $ Mt.reshape dimen b)
 	return $ NeuralNet ft ot
 
 
 featureVecArray :: NeuralNet -> [Features]
-featureVecArray (NeuralNet ft_ _) = map snd $ IM.toAscList ft_
+featureVecArray (NeuralNet ft_ _) = map snd $ toAscList ft_
 
 forceEval :: NeuralNet -> Int
-forceEval (NeuralNet ft _) = IM.size $ ft
+forceEval (NeuralNet ft _) = size ft
