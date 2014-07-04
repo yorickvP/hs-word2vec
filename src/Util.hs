@@ -1,6 +1,7 @@
 module Util (
 	imap
   , plot
+  , plotLine
 )
 where
 
@@ -31,3 +32,18 @@ plot points = do
 				"set output \"pca.png\"",
 				"plot \"" ++ filename ++ "\" using 2:3:1 with labels title \"\""]]
 		filename = "plot1.dat"
+
+plotLine :: (Show a, Num a) => [(Int, a)] -> IO Bool
+plotLine points = do
+	writeFile filename dataset
+	exitCode <- rawSystem "gnuplot" args
+	return $ exitCode == ExitSuccess
+	where 
+		-- todo see if this works when haskell uses scientific notation
+		dataset = unlines $ map (\(a, b) -> (show a) ++ " " ++ (show b)) points
+		args = ["-e", join ";" [
+				"set term png size 1024,1024",
+				--"set offsets 1,1,1,1",
+				"set output \"line.png\"",
+				"plot \"" ++ filename ++ "\" using 1:2 with linespoints title \"\""]]
+		filename = "plot_line.dat"

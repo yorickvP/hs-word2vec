@@ -5,6 +5,8 @@ module HSNeuralNet (
   , runWord
   , getFeat
   , forceEval
+  , Average
+  , calcAvg
 )
 where
 
@@ -16,8 +18,8 @@ import Numeric.LinearAlgebra (dot, scale)
 import Data.IntMap.Strict (IntMap, (!), insert, fromAscList, size, toAscList)
 import Data.List (foldl')
 import Vocab (WordDesc (..), TrainProgress (..))
+import Control.Monad.Writer
 import Util
-import Debug.Trace
 
 type DVec = Mt.Vector Double
 type Features = DVec
@@ -34,6 +36,10 @@ addAvg :: Average -> Double -> Int -> Average
 addAvg (Average (total, len)) subtot sublen = Average (total + subtot, len + sublen)
 cleanAvg :: Average
 cleanAvg = Average (0, 0)
+avgSize :: Average -> Int
+avgSize (Average (_, len)) = len
+type StatusUpdate = (Double, TrainProgress, Average)
+type StatusWriter = Writer [StatusUpdate]
 -- furthermore, we're going to need functions for common operations
 -- (exported) getFeat gets a feature vector for a specific word index
 -- this is also used to output the word data
@@ -59,7 +65,7 @@ sigmoid x = 1.0 / (1.0 + (exp (- x)))
 -- so calculate logsigmoid for every code and point
 -- derivative of logsigmoid(1 * x) = 1 - sigmoid(x) (or sigmoid(-x))
 -- derivative of logsigmoid(-1 * x) = 0 - sigmoid(x) (or -sigmoid(x))
-(rateMax, rateMin) = (0.025, 0.0001) :: (Double, Double)
+(rateMax, rateMin) = (0.05, 0.002) :: (Double, Double)
 rateAdj :: TrainProgress -> Double
 rateAdj (TrainProgress itcount total) =
 	max rateMin $ rateMax * (1.0 - ((fromIntegral itcount) / (1.0 + fromIntegral total)))
@@ -77,10 +83,11 @@ singleIter rate l1 (neu1e, output, err) (c, p) = (neu1e', output', err + errf)
 		output' = insert p (l2 + (g `scale` l1)) output
 
 -- use a word pair (and label/place in the tree of the word we're looking around)
-runWord :: NeuralNet -> TrainProgress -> (WordDesc, WordDesc) -> NeuralNet
+runWord :: NeuralNet -> TrainProgress -> (WordDesc, WordDesc) -> StatusWriter NeuralNet
 runWord net@(NeuralNet _ output avg) progress@(TrainProgress itcount _)
-							  (WordDesc _ treepos, WordDesc expected _) =
-	updateNet net expected newfeat newout newavg
+							  (WordDesc _ treepos, WordDesc expected _) = do
+	when ((avgSize avg' > 100) && ((itcount `mod` 10000) == 0)) $ tell [(rate, progress, avg')]
+	return $ updateNet net expected newfeat newout newavg
 	where
 		rate    = rateAdj progress
 		l1      = getFeat net expected

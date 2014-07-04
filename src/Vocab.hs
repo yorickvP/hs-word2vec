@@ -16,6 +16,7 @@ where
 
 import System.Random
 import Control.Monad (foldM)
+import Control.Monad.Trans
 import Data.Maybe (isJust)
 import Control.Monad.Supply
 import Control.Monad.Random
@@ -91,9 +92,9 @@ inc (TrainProgress x total) = TrainProgress (x+1) total
 startProgress :: Vocab -> TrainProgress
 startProgress = TrainProgress 0 . wordCount
 
-iterateWordContexts :: (RandomGen g) =>
+iterateWordContexts :: (RandomGen g, Monad m)  =>
 	[Array Int B.ByteString] -> Int -> TrainProgress -> (B.ByteString -> Maybe b) -> (B.ByteString -> Bool)
-	 -> (TrainProgress -> b -> a -> B.ByteString -> a) -> a -> Rand g a
+	 -> (TrainProgress -> b -> a -> B.ByteString -> m a) -> a -> RandT g m a
 iterateWordContexts (arr:xs) ctx progress primary_filter filt folder start = do
 	-- iterate over array
 	--r <- getRandomR (1, ctx)
@@ -111,8 +112,9 @@ iterateWordContexts (arr:xs) ctx progress primary_filter filt folder start = do
 				Just word -> do
 					let before = wrds lookaround (enumFromThenTo (idx - 1) (idx - 2) lower)
 					let after  = wrds lookaround (enumFromThenTo (idx + 1) (idx + 2) upper)
-					let strt' = foldl' (folder progress word) strt before
-					return    $ (inc progress, foldl' (folder progress word) strt' after)
+					strt' <- lift $ foldM (folder progress word) strt before
+					strt'' <- lift $ foldM (folder progress word) strt' after
+					return    $ (inc progress, strt'')
 			where
 				--wrds :: (RandomGen g) => Int -> [Int] -> Rand g [B.ByteString]
 				wrds lookaround x = take lookaround $ filter filt $ map (arr !) x
@@ -175,8 +177,8 @@ findIndex vocab str = (vocabWords vocab) IM.! str
 getWordDesc :: Vocab -> WordIdx -> WordDesc
 getWordDesc vocab x = WordDesc x $ (vocabHuffman vocab) IM.! x
 
-doIteration :: (RandomGen g) => Vocab -> B.ByteString -> Int ->
-				(a -> TrainProgress -> (WordDesc, WordDesc) -> a) -> a -> Rand g a
+doIteration :: (RandomGen g, Monad m) => Vocab -> B.ByteString -> Int ->
+				(a -> TrainProgress -> (WordDesc, WordDesc) -> m a) -> a -> RandT g m a
 doIteration vocab str ctx folder net = do
 	let trainlines = lineArr str
 	iterateWordContexts trainlines ctx (startProgress vocab) (safeWordIdx vocab) filt train net

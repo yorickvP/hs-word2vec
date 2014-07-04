@@ -18,7 +18,10 @@
 --  multiply this with the output weight matrix to get the output values
 -- softmax it based on the output word, and backprop it
 
-import Control.Monad.Random (evalRandIO)
+import Control.Monad (forM_)
+import Control.Monad.Random (evalRandT)
+import Control.Monad.Writer
+import System.Random (getStdGen)
 
 import Data.List (intersperse)
 import qualified Data.Packed.Vector as Mt
@@ -28,6 +31,7 @@ import qualified Data.ByteString.Char8 as C8
 import qualified Data.ByteString.Lazy as L
 import qualified Vocab as Vocab
 import qualified HSNeuralNet as NN
+import Util
 
 
 runAllWords :: Vocab.Vocab -> B.ByteString -> Int -> IO ()
@@ -47,10 +51,19 @@ runAllWords vocab content dimens = do
 	where
 		wordsIteration :: NN.NeuralNet -> IO NN.NeuralNet
 		wordsIteration net = do
+			gen <- getStdGen
 			let itercount = 1 :: Int
 			-- fold NN.runWord over all the training pairs
 			-- max lookaround: 5, maxrate: 0.025, minrate: 0.0001
-			net2 <- evalRandIO $ Vocab.doIteration vocab content 5 NN.runWord net
+			let func = Vocab.doIteration vocab content 5 NN.runWord net
+			let (net2, statusupdates) = runWriter $ evalRandT func gen
+			forM_ statusupdates (\(rate, Vocab.TrainProgress itcount total, avg) ->
+				putStrLn $ "iteration " ++ (show itcount) ++
+								" / " ++ (show total) ++
+								" average: " ++ (show $ NN.calcAvg avg)
+				)
+			plotLine $ map (\(_, Vocab.TrainProgress itcount _, avg) -> (itcount, NN.calcAvg avg))
+						statusupdates
 			putStrLn $ "iteration " ++ (show itercount) ++ " complete "  ++ (show $ NN.forceEval net2)
 			return net2
 			-- possibly run this multiple times, not needed
