@@ -60,7 +60,8 @@ main :: IO ()
 main = do
 	crps <- B.readFile "corpus.txt"
 	-- only use words that occur more than 5 times
-	let vocab = Vocab.makeVocab (Vocab.countWordFreqs $ C8.words crps) 5
+	let vocab = Vocab.makeVocab (Vocab.countWordFreqs $
+		concatMap (++ [C8.pack "</s>"]) $ map C8.words $ C8.lines crps) 5
 	putStrLn $ "Vocab loading complete: " ++
 		(show $ Vocab.wordCount vocab) ++ " total words, "
 		++ (show $ Vocab.uniqueWords vocab) ++ " unique words"

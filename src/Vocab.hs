@@ -14,7 +14,7 @@ module Vocab (
 where
 
 import System.Random
-import Control.Monad (liftM, foldM)
+import Control.Monad (liftM, foldM, filterM)
 import Data.Maybe (isJust)
 import Control.Monad.Supply
 import Control.Monad.Random
@@ -83,7 +83,7 @@ type BinTreeLocation = [(Bool, TreeIdx)]
 data WordDesc = WordDesc WordIdx BinTreeLocation
 
 iterateWordContexts :: (RandomGen g) =>
-	[Array Int B.ByteString] -> Int -> Int -> (B.ByteString -> Maybe b) -> (B.ByteString -> Rand g Bool)
+	[Array Int B.ByteString] -> Int -> Int -> (B.ByteString -> Maybe b) -> (B.ByteString -> Bool)
 	 -> (Int -> b -> a -> B.ByteString -> a) -> a -> Rand g a
 iterateWordContexts (arr:xs) ctx iterationcount primary_filter filt folder start = do
 	-- iterate over array
@@ -100,28 +100,15 @@ iterateWordContexts (arr:xs) ctx iterationcount primary_filter filt folder start
 			case primary_filter (arr ! idx) of
 				Nothing   -> return (iterationcount,  strt) -- should this be + 1?
 				Just word -> do
-					before <- wrds lookaround (enumFromThenTo (idx - 1) (idx - 2) lower)
-					after  <- wrds lookaround (enumFromThenTo (idx + 1) (idx + 2) upper)
+					let before = wrds lookaround (enumFromThenTo (idx - 1) (idx - 2) lower)
+					let after  = wrds lookaround (enumFromThenTo (idx + 1) (idx + 2) upper)
 					let strt' = foldl' (folder iterationcount word) strt before
 					return    $ (iterationcount + 1, foldl' (folder iterationcount word) strt' after)
 			where
 				--wrds :: (RandomGen g) => Int -> [Int] -> Rand g [B.ByteString]
-				wrds lookaround x = takeNfiltM x (\i -> do
-						let s = arr ! i
-						out <- filt s
-						return (if out then Just s else Nothing)) lookaround
+				wrds lookaround x = take lookaround $ filter filt $ map (arr !) x
 iterateWordContexts [] _ _ _ _ _ start = return start
 
--- helper function, something like (take n $ catMaybes $ map pred xs), but monadically
--- without evaluating any unneeded results, like mapM would.
-takeNfiltM :: (Monad m) => [a] -> (a -> m (Maybe b)) -> Int -> m [b]
-takeNfiltM [] _ _ = return []
-takeNfiltM  _ _ 0 = return []
-takeNfiltM (x:xs) pred n = do
-	x' <- pred x
-	case x' of
-		Nothing  -> takeNfiltM xs pred n
-		Just val -> liftM (val :) $ takeNfiltM xs pred (n - 1)
 
 
 countWordFreqs :: [B.ByteString] -> WordCounts
@@ -142,9 +129,12 @@ uniqueWords :: Vocab -> WordCount
 uniqueWords = HM.size . wordCounts
 
 lineArr :: B.ByteString -> [Array Int B.ByteString]
-lineArr = map (toArray . C8.words) . UTF8.lines
+lineArr = map (toArray . (++ [C8.pack "</s>"]) . C8.words) . UTF8.lines
 	where toArray x = listArray (0, length x - 1) x
 
+--lineFiltMArr :: Monad m => (B.ByteString -> m Bool) -> B.ByteString -> m [Array Int B.ByteString]
+--lineFiltMArr pred = mapM (liftM toArray . filterM pred . C8.words) . UTF8.lines
+--	where toArray x = listArray (0, length x - 1) x
 
 hasWord :: Vocab -> B.ByteString -> Bool
 hasWord v = isJust . (flip HM.lookup) (wordCounts v)
@@ -163,22 +153,26 @@ wordFreq :: Vocab -> B.ByteString -> Float
 wordFreq (Vocab tr total _ _) x = ((fromIntegral count) / (fromIntegral total))
 	where (_, count) = tr HM.! x
 
-subsample :: (RandomGen g) => Vocab -> B.ByteString -> Rand g Bool
-subsample vocab x = if not $ hasWord vocab x then return False else do
-	r <- getRandom
-	let freq = wordFreq vocab x
-	let prob = 1 - (sqrt (1e-5 / freq))
-	return $ prob >= (r :: Float)
+-- subsampling isn't desirable, because we're looking at the most frequent words
+-- instead of all the words
+--subsample :: (RandomGen g) => Vocab -> B.ByteString -> Rand g Bool
+--subsample vocab@(Vocab tr total _ _) x = if not $ hasWord vocab x then return False else do
+--	r <- getRandom
+--	let (_, count) = tr HM.! x
+--	let freq = wordFreq vocab x
+--	let prob = max 0 $ 1.0 - sqrt (1e-5 / freq)
+--	return $ not $ prob >= (r :: Float)
 
 getWordDesc :: Vocab -> WordIdx -> WordDesc
 getWordDesc vocab x = WordDesc x $ (vocabHuffman vocab) IM.! x
 
 doIteration :: (RandomGen g) => Vocab -> B.ByteString -> Int -> (Double, Double) ->
 				(a -> Double -> (WordDesc, WordDesc) -> a) -> a -> Rand g a
-doIteration vocab str ctx (rateMax, rateMin) folder net =
-	iterateWordContexts (lineArr str) ctx 0 (safeWordIdx vocab) filt train net
+doIteration vocab str ctx (rateMax, rateMin) folder net = do
+	let trainlines = lineArr str
+	iterateWordContexts trainlines ctx 0 (safeWordIdx vocab) filt train net
 	where
-		filt = return . hasWord vocab --subsample vocab
+		filt = hasWord vocab
 		rateAdj :: Int -> Double
 		rateAdj itcount = max rateMin $ rateMax * (1.0 - ((fromIntegral itcount) / (1.0 + fromIntegral (wordCount vocab))))
 		train itcount a net b = folder net (rateAdj itcount)

@@ -54,12 +54,14 @@ sigmoid x = 1.0 / (1.0 + (exp (- x)))
 
 -- foldl [(Bool, Int)] -> NeuralNet -> (neu1e, NeuralNet)
 singleIter :: Double -> Features -> (DVec, OutLayer) -> (Bool, Int) -> (DVec, OutLayer)
-singleIter rate l1 (neu1e, output) (c, p) = (neu1e', output')
+singleIter rate l1 (neu1e, output) (c, p) =
+	if (abs f >= 6) then (neu1e, output) else (neu1e', output')
 	where
 		l2      = output IM.! p
-		f       = sigmoid (l1 `Mt.dot` l2)
+		f       = l1 `Mt.dot` l2
+		f'       = sigmoid (l1 `Mt.dot` l2)
 		--   g  = logsigmoid'(l1 `dot` l2) * rate
-		g       = (1.0 - (fromIntegral $ fromEnum c) - f) * rate
+		g       = (1.0 - (fromIntegral $ fromEnum c) - f') * rate
 		neu1e'  = Mt.add (Mt.scale g l2) neu1e
 		output' = IM.insert p ((output IM.! p) + (Mt.scale g l1)) output
 
