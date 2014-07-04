@@ -9,12 +9,13 @@ module Vocab (
   , findIndex
   , sortedVecList
   , WordDesc (..)
+  , TrainProgress (..)
   , Vocab
 )
 where
 
 import System.Random
-import Control.Monad (liftM, foldM, filterM)
+import Control.Monad (foldM)
 import Data.Maybe (isJust)
 import Control.Monad.Supply
 import Control.Monad.Random
@@ -81,29 +82,37 @@ data Vocab = Vocab { wordCounts   :: !WordIdCounts
 type TreeIdx = Int
 type BinTreeLocation = [(Bool, TreeIdx)]
 data WordDesc = WordDesc WordIdx BinTreeLocation
+-- Let's make a type to store the progress (iteration / total)
+-- To easily pass it around, and use it to calculate the learning rate
+-- and write the average every some iterations
+data TrainProgress = TrainProgress Int WordCount
+inc :: TrainProgress -> TrainProgress
+inc (TrainProgress x total) = TrainProgress (x+1) total
+startProgress :: Vocab -> TrainProgress
+startProgress = TrainProgress 0 . wordCount
 
 iterateWordContexts :: (RandomGen g) =>
-	[Array Int B.ByteString] -> Int -> Int -> (B.ByteString -> Maybe b) -> (B.ByteString -> Bool)
-	 -> (Int -> b -> a -> B.ByteString -> a) -> a -> Rand g a
-iterateWordContexts (arr:xs) ctx iterationcount primary_filter filt folder start = do
+	[Array Int B.ByteString] -> Int -> TrainProgress -> (B.ByteString -> Maybe b) -> (B.ByteString -> Bool)
+	 -> (TrainProgress -> b -> a -> B.ByteString -> a) -> a -> Rand g a
+iterateWordContexts (arr:xs) ctx progress primary_filter filt folder start = do
 	-- iterate over array
 	--r <- getRandomR (1, ctx)
-	(iterationcount', result) <- foldM (idxfold) (iterationcount, start) $ indices arr
+	(progress', result) <- foldM (idxfold) (progress, start) $ indices arr
 	-- get result
-	iterateWordContexts xs ctx iterationcount' primary_filter filt folder result
+	iterateWordContexts xs ctx progress' primary_filter filt folder result
 	where
 		-- need scoped type variables
 		-- idxfold :: (RandomGen g) => (Int, a) -> Int -> Rand g (Int, a)
-		idxfold (iterationcount, strt) idx = do
+		idxfold (progress, strt) idx = do
 			lookaround <- getRandomR (1, ctx)
 			let (lower, upper) = bounds arr
 			case primary_filter (arr ! idx) of
-				Nothing   -> return (iterationcount,  strt) -- should this be + 1?
+				Nothing   -> return (progress,  strt) -- should this be + 1?
 				Just word -> do
 					let before = wrds lookaround (enumFromThenTo (idx - 1) (idx - 2) lower)
 					let after  = wrds lookaround (enumFromThenTo (idx + 1) (idx + 2) upper)
-					let strt' = foldl' (folder iterationcount word) strt before
-					return    $ (iterationcount + 1, foldl' (folder iterationcount word) strt' after)
+					let strt' = foldl' (folder progress word) strt before
+					return    $ (inc progress, foldl' (folder progress word) strt' after)
 			where
 				--wrds :: (RandomGen g) => Int -> [Int] -> Rand g [B.ByteString]
 				wrds lookaround x = take lookaround $ filter filt $ map (arr !) x
@@ -149,9 +158,9 @@ safeWordIdx v = fmap fst . (flip HM.lookup) (wordCounts v)
 findIndex :: Vocab -> WordIdx -> B.ByteString
 findIndex vocab str = (vocabWords vocab) IM.! str
 
-wordFreq :: Vocab -> B.ByteString -> Float
-wordFreq (Vocab tr total _ _) x = ((fromIntegral count) / (fromIntegral total))
-	where (_, count) = tr HM.! x
+--wordFreq :: Vocab -> B.ByteString -> Float
+--wordFreq (Vocab tr total _ _) x = ((fromIntegral count) / (fromIntegral total))
+--	where (_, count) = tr HM.! x
 
 -- subsampling isn't desirable, because we're looking at the most frequent words
 -- instead of all the words
@@ -166,16 +175,14 @@ wordFreq (Vocab tr total _ _) x = ((fromIntegral count) / (fromIntegral total))
 getWordDesc :: Vocab -> WordIdx -> WordDesc
 getWordDesc vocab x = WordDesc x $ (vocabHuffman vocab) IM.! x
 
-doIteration :: (RandomGen g) => Vocab -> B.ByteString -> Int -> (Double, Double) ->
-				(a -> Double -> (WordDesc, WordDesc) -> a) -> a -> Rand g a
-doIteration vocab str ctx (rateMax, rateMin) folder net = do
+doIteration :: (RandomGen g) => Vocab -> B.ByteString -> Int ->
+				(a -> TrainProgress -> (WordDesc, WordDesc) -> a) -> a -> Rand g a
+doIteration vocab str ctx folder net = do
 	let trainlines = lineArr str
-	iterateWordContexts trainlines ctx 0 (safeWordIdx vocab) filt train net
+	iterateWordContexts trainlines ctx (startProgress vocab) (safeWordIdx vocab) filt train net
 	where
 		filt = hasWord vocab
-		rateAdj :: Int -> Double
-		rateAdj itcount = max rateMin $ rateMax * (1.0 - ((fromIntegral itcount) / (1.0 + fromIntegral (wordCount vocab))))
-		train itcount a net b = folder net (rateAdj itcount)
+		train progress a net b = folder net progress
 								  (getWordDesc vocab a, getWordDesc vocab $ wordIdx vocab b)
 
 

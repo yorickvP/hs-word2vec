@@ -15,7 +15,7 @@ import qualified Numeric.LinearAlgebra as Mt
 import Data.IntMap.Strict (IntMap)
 import qualified Data.IntMap.Strict as IM
 import Data.List (foldl')
-import Vocab (WordDesc (..))
+import Vocab (WordDesc (..), TrainProgress (..))
 import Util
 
 type DVec = Mt.Vector Double
@@ -51,6 +51,10 @@ sigmoid x = 1.0 / (1.0 + (exp (- x)))
 -- so calculate logsigmoid for every code and point
 -- derivative of logsigmoid(1 * x) = 1 - sigmoid(x) (or sigmoid(-x))
 -- derivative of logsigmoid(-1 * x) = 0 - sigmoid(x) (or -sigmoid(x))
+(rateMax, rateMin) = (0.025, 0.0001) :: (Double, Double)
+rateAdj :: TrainProgress -> Double
+rateAdj (TrainProgress itcount total) =
+	max rateMin $ rateMax * (1.0 - ((fromIntegral itcount) / (1.0 + fromIntegral total)))
 
 -- foldl [(Bool, Int)] -> NeuralNet -> (neu1e, NeuralNet)
 singleIter :: Double -> Features -> (DVec, OutLayer) -> (Bool, Int) -> (DVec, OutLayer)
@@ -62,14 +66,15 @@ singleIter rate l1 (neu1e, output) (c, p) =
 		f'       = sigmoid (l1 `Mt.dot` l2)
 		--   g  = logsigmoid'(l1 `dot` l2) * rate
 		g       = (1.0 - (fromIntegral $ fromEnum c) - f') * rate
-		neu1e'  = Mt.add (Mt.scale g l2) neu1e
-		output' = IM.insert p ((output IM.! p) + (Mt.scale g l1)) output
+		neu1e'  = neu1e + (g `Mt.scale` l2)
+		output' = IM.insert p ((output IM.! p) + (g `Mt.scale` l1)) output
 
 -- use a word pair (and label/place in the tree of the word we're looking around)
-runWord :: NeuralNet -> Double -> (WordDesc, WordDesc) -> NeuralNet
-runWord net@(NeuralNet _ output) rate (WordDesc _ treepos, WordDesc expected _) =
+runWord :: NeuralNet -> TrainProgress -> (WordDesc, WordDesc) -> NeuralNet
+runWord net@(NeuralNet _ output) progress (WordDesc _ treepos, WordDesc expected _) =
 	updateNet net expected newfeat newout
 	where
+		rate             = rateAdj progress
 		l1               = getFeat net expected
 		neu1e            = Mt.constant 0.0 (Mt.dim l1)
 		(neu1e', newout) = foldl' (singleIter rate l1) (neu1e, output) treepos

@@ -50,7 +50,7 @@ runAllWords vocab content dimens = do
 			let itercount = 1 :: Int
 			-- fold NN.runWord over all the training pairs
 			-- max lookaround: 5, maxrate: 0.025, minrate: 0.0001
-			net2 <- evalRandIO $ Vocab.doIteration vocab content 5 (0.025, 0.0001) NN.runWord net
+			net2 <- evalRandIO $ Vocab.doIteration vocab content 5 NN.runWord net
 			putStrLn $ "iteration " ++ (show itercount) ++ " complete "  ++ (show $ NN.forceEval net2)
 			return net2
 			-- possibly run this multiple times, not needed
