@@ -17,6 +17,7 @@ import Data.IntMap.Strict (IntMap, (!), insert, fromAscList, size, toAscList)
 import Data.List (foldl')
 import Vocab (WordDesc (..), TrainProgress (..))
 import Util
+import Debug.Trace
 
 type DVec = Mt.Vector Double
 type Features = DVec
@@ -25,17 +26,24 @@ type OutLayer = IntMap DVec
 Let's specify a type to store our entire network in.
 Together with the Vocab, this'll be the state of the entire system.
 -}
-data NeuralNet = NeuralNet !(IntMap Features) !(OutLayer)
+data NeuralNet = NeuralNet !(IntMap Features) !(OutLayer) !Average
+newtype Average = Average (Double, Int)
+calcAvg :: Average -> Double
+calcAvg (Average (total, len)) = total / (fromIntegral len)
+addAvg :: Average -> Double -> Int -> Average
+addAvg (Average (total, len)) subtot sublen = Average (total + subtot, len + sublen)
+cleanAvg :: Average
+cleanAvg = Average (0, 0)
 -- furthermore, we're going to need functions for common operations
 -- (exported) getFeat gets a feature vector for a specific word index
 -- this is also used to output the word data
 getFeat :: NeuralNet -> Int -> Features
-getFeat (NeuralNet x _) i = x ! i
+getFeat (NeuralNet x _ _) i = x ! i
 -- and this is a common case, too, a single new feature vector
 -- and an updated set of output vectors
-updateNet :: NeuralNet -> Int -> Features -> (OutLayer) -> NeuralNet
-updateNet (NeuralNet x _) idx val out =
-	NeuralNet (insert idx val x) out
+updateNet :: NeuralNet -> Int -> Features -> (OutLayer) -> Average -> NeuralNet
+updateNet (NeuralNet x _ _) idx val out avg =
+	NeuralNet (insert idx val x) out avg
 
 sigmoid :: Double -> Double
 sigmoid x = 1.0 / (1.0 + (exp (- x)))
@@ -57,26 +65,30 @@ rateAdj (TrainProgress itcount total) =
 	max rateMin $ rateMax * (1.0 - ((fromIntegral itcount) / (1.0 + fromIntegral total)))
 
 -- foldl [(Bool, Int)] -> NeuralNet -> (neu1e, NeuralNet)
-singleIter :: Double -> Features -> (DVec, OutLayer) -> (Bool, Int) -> (DVec, OutLayer)
-singleIter rate l1 (neu1e, output) (c, p) = (neu1e', output')
+singleIter :: Double -> Features -> (DVec, OutLayer, Double) -> (Bool, Int) -> (DVec, OutLayer, Double)
+singleIter rate l1 (neu1e, output, err) (c, p) = (neu1e', output', err + errf)
 	where
 		l2      = output ! p
-		f       = sigmoid (l1 `dot` l2)
+		f       = l1 `dot` l2
+		errf    = log $ sigmoid $ (if c then -1.0 else (1.0)) * f -- flip 1 and -1?
 		--   g  = logsigmoid_c'(l1 `dot` l2) * rate
-		g       = (1.0 - (fromIntegral $ fromEnum c) - f) * rate
+		g       = (1.0 - (fromIntegral $ fromEnum c) - (sigmoid f)) * rate
 		neu1e'  = neu1e + (g `scale` l2)
 		output' = insert p (l2 + (g `scale` l1)) output
 
 -- use a word pair (and label/place in the tree of the word we're looking around)
 runWord :: NeuralNet -> TrainProgress -> (WordDesc, WordDesc) -> NeuralNet
-runWord net@(NeuralNet _ output) progress (WordDesc _ treepos, WordDesc expected _) =
-	updateNet net expected newfeat newout
+runWord net@(NeuralNet _ output avg) progress@(TrainProgress itcount _)
+							  (WordDesc _ treepos, WordDesc expected _) =
+	updateNet net expected newfeat newout newavg
 	where
-		rate             = rateAdj progress
-		l1               = getFeat net expected
-		neu1e            = Mt.constant 0.0 (Mt.dim l1)
-		(neu1e', newout) = foldl' (singleIter rate l1) (neu1e, output) treepos
-		newfeat          = l1 + neu1e'
+		rate    = rateAdj progress
+		l1      = getFeat net expected
+		neu1e   = Mt.constant 0.0 (Mt.dim l1)
+		(neu1e', newout, toterr) = foldl' (singleIter rate l1) (neu1e, output, 0.0) treepos
+		newfeat = l1 + neu1e'
+		avg'    = addAvg avg toterr (length treepos)
+		newavg  = if (itcount `mod` 10000) == 0 then cleanAvg else avg' -- trace calcAvg avg'
 
 
 randomNetwork :: Int -> Int -> IO NeuralNet
@@ -87,11 +99,11 @@ randomNetwork vocab dimen = do
 	let b = Mt.constant 0.0 (vocab * dimen) :: DVec
 	let ft = fromAscList $ imap (,) (Mt.toRows $ Mt.reshape dimen a')
 	let ot = fromAscList $ imap (,) (Mt.toRows $ Mt.reshape dimen b)
-	return $ NeuralNet ft ot
+	return $ NeuralNet ft ot cleanAvg
 
 
 featureVecArray :: NeuralNet -> [Features]
-featureVecArray (NeuralNet ft_ _) = map snd $ toAscList ft_
+featureVecArray (NeuralNet ft_ _ _) = map snd $ toAscList ft_
 
 forceEval :: NeuralNet -> Int
-forceEval (NeuralNet ft _) = size ft
+forceEval (NeuralNet ft _ _) = size ft
