@@ -15,7 +15,7 @@ module Vocab (
 where
 
 import System.Random
-import Control.Monad (foldM)
+import Control.Monad (foldM) -- filterM, liftM
 import Control.Monad.Trans
 import Data.Maybe (isJust)
 import Control.Monad.Supply
@@ -164,9 +164,9 @@ findIndex vocab str = (vocabWords vocab) IM.! str
 --wordFreq (Vocab tr total _ _) x = ((fromIntegral count) / (fromIntegral total))
 --	where (_, count) = tr HM.! x
 
--- subsampling isn't desirable, because we're looking at the most frequent words
--- instead of all the words
---subsample :: (RandomGen g) => Vocab -> B.ByteString -> Rand g Bool
+ --subsampling isn't desirable, because we're looking at the most frequent words
+ --instead of all the words
+--subsample :: (RandomGen g, Monad m) => Vocab -> B.ByteString -> RandT g m Bool
 --subsample vocab@(Vocab tr total _ _) x = if not $ hasWord vocab x then return False else do
 --	r <- getRandom
 --	let (_, count) = tr HM.! x
@@ -181,6 +181,8 @@ doIteration :: (RandomGen g, Monad m) => Vocab -> B.ByteString -> Int ->
 				(a -> TrainProgress -> (WordDesc, WordDesc) -> m a) -> a -> RandT g m a
 doIteration vocab str ctx folder net = do
 	let trainlines = lineArr str
+	-- disable subsampling: it's not good for PCA image quality
+	-- trainlines <- lineFiltMArr (subsample vocab) str
 	iterateWordContexts trainlines ctx (startProgress vocab) (safeWordIdx vocab) filt train net
 	where
 		filt = hasWord vocab
