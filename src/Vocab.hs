@@ -60,14 +60,15 @@ This is why we have a datastructure storing just the word counts, and one that a
 contains a label.
 -}
 type WordIdx      = Int
+type WordString   = B.ByteString
 type WordCount    = Int
-type WordCounts   = HashMap B.ByteString WordCount
-type WordIdCounts = HashMap B.ByteString (WordIdx, WordCount)
+type WordCounts   = HashMap WordString WordCount
+type WordIdCounts = HashMap WordString (WordIdx, WordCount)
 {-
 Then, we need a datastructure to map the indices back to words,
 to be able to make the PCA plot.
 -}
-type IndexWordMap = IntMap B.ByteString
+type IndexWordMap = IntMap WordString
 {-
 Now that we have these structures, let's put them into a datatype for easy use.
 
@@ -97,45 +98,55 @@ inc :: TrainProgress -> TrainProgress
 inc (TrainProgress x total) = TrainProgress (x+1) total
 
 -- an ugly function...
--- iterate over words in a list of lines, with context,
+-- helper function for doIteration, given an array, for each element,
+-- fold folder over at most ctx words in the context
 -- (n before and n after, with 1 <= n <= ctx)
--- applying the neccesary maps and filters along the way
-iterateWordContexts :: (RandomGen g, Monad m)  =>
-	[Array Int B.ByteString] -> Int -> TrainProgress -> (B.ByteString -> Maybe b) -> (B.ByteString -> Bool)
-	 -> (TrainProgress -> b -> a -> B.ByteString -> m a) -> a -> RandT g m a
-iterateWordContexts (arr:xs) ctx progress primary_filter filt folder start = do
+-- applying the neccesary maps and filters along the way, to ensure
+-- that the word is in the vocabulary and to pass the word descriptor
+iterateWordContexts :: (RandomGen g, Monad m, Enum n, Ix n)  =>
+	Vocab -> Int -> (a -> TrainProgress -> (WordDesc, WordDesc) -> m a) ->
+	(TrainProgress, a) -> Array n WordString -> RandT g m (TrainProgress, a)
+iterateWordContexts vocab ctx folder startval arr =
 	-- iterate over array
-	(progress', result) <- foldM (idxfold) (progress, start) $ indices arr
-	-- iterate over the rest of the lines
-	iterateWordContexts xs ctx progress' primary_filter filt folder result
+	foldM idxfold startval $ assocs arr
 	where
+		train progress a net b = folder net progress
+								  (getWordDesc vocab a, getWordDesc vocab $ wordIdx vocab b)
 		-- given an index, loop over all of the context with the folder
 		-- keeping track of progress as well.
-		-- This type needs scoped type variables to work
-		-- idxfold :: (RandomGen g) => (Int, a) -> Int -> Rand g (Int, a)
-		idxfold (progress, strt) idx = do
-			-- pick window size between 1 <= n <= ctx
-			lookaround <- getRandomR (1, ctx)
-			-- but make sure not to get more words than there are in the sentence
-			let (lower, upper) = bounds arr
+		-- idxfold :: (RandomGen g) => (TrainProgress, a) -> (n, WordString) -> Rand g (TrainProgress, a)
+		idxfold inval@(progress, strt) (idx, wordStr) =
 			-- the primary filter looks up the word in the vocabulary
-			case primary_filter (arr ! idx) of
-				Nothing   -> return (progress,  strt) -- non-filtered words are
-					--not counted in the total, so don't increment the progress
+			case safeWordIdx vocab wordStr of
+				Nothing   -> return inval -- non-filtered words are not
+					-- counted in the total, so don't increment the progress
 				Just word -> do
-					let before = toWords lookaround (enumFromThenTo (idx - 1) (idx - 2) lower)
-					let after  = toWords lookaround (enumFromThenTo (idx + 1) (idx + 2) upper)
-					strt'  <- lift $ foldM (folder progress word) strt before
-					strt'' <- lift $ foldM (folder progress word) strt' after
-					return (inc progress, strt'')
-			where
-				toWords lookaround x = take lookaround $ filter filt $ map (arr !) x
--- at the end, return the fold result
-iterateWordContexts [] _ _ _ _ _ start = return start
+					-- pick window size between 1 <= n <= ctx
+					lookaround <- getRandomR (1, ctx)
+					-- but make sure not to get more words than there are in the sentence
+					let (lower, upper) = bounds arr
+					-- all the word indices before and after
+					let beforeafter = [[lower .. pred idx], [succ idx .. upper]]
+					-- now filter them to get only `lookaround` valid words
+					let fullcontext = map (take lookaround . filter (hasWord vocab) . map (arr !)) beforeafter
+					strt'  <- lift $ foldM (foldM $ train progress word) strt fullcontext
+					return (inc progress, strt')
+
+-- taking a vocabulary and training file, a window size and a training function,
+-- fold over all the training word pairs
+-- exported
+doIteration :: (RandomGen g, Monad m) => Vocab -> B.ByteString -> Int ->
+				(a -> TrainProgress -> (WordDesc, WordDesc) -> m a) -> a -> RandT g m a
+doIteration vocab str ctx folder net = do
+	-- disable subsampling: it's not good for PCA image quality
+	-- trainlines <- lineFiltMArr (subsample vocab) str
+	let trainlines = lineArr str
+	(_progress', result) <- foldM (iterateWordContexts vocab ctx folder) (startProgress vocab, net) trainlines
+	return result
 
 -- and now, some functions to make the vocabulary
 
-countWordFreqs :: [B.ByteString] -> WordCounts
+countWordFreqs :: [WordString] -> WordCounts
 countWordFreqs = foldl' (flip (flip (HM.insertWith (+)) 1)) HM.empty
 
 -- assign indices to the words
@@ -159,38 +170,37 @@ uniqueWords = HM.size . wordCounts
 
 -- make the corpus file into a list of sentences (array of words), appending </s> to
 -- every sentence to train the end of the line too. this improves training quite a bit.
-lineArr :: B.ByteString -> [Array Int B.ByteString]
+lineArr :: B.ByteString -> [Array Int WordString]
 lineArr = map (toArray . (++ [C8.pack "</s>"]) . C8.words) . C8.lines
 	where toArray x = listArray (0, length x - 1) x
 
--- used primarily for subsampling, lineArr, but with a filterM on the words
---lineFiltMArr :: Monad m => (B.ByteString -> m Bool) -> B.ByteString -> m [Array Int B.ByteString]
+-- used for subsampling: lineArr, but with a filterM on the words
+--lineFiltMArr :: Monad m => (WordString -> m Bool) -> B.ByteString -> m [Array Int WordString]
 --lineFiltMArr pred = mapM (liftM toArray . filterM pred . C8.words) . C8.lines
 --	where toArray x = listArray (0, length x - 1) x
 
 -- some vocab lookup functions
 
-hasWord :: Vocab -> B.ByteString -> Bool
+hasWord :: Vocab -> WordString -> Bool
 hasWord v = isJust . safeWordIdx v
 
-wordIdx :: Vocab -> B.ByteString -> WordIdx
+wordIdx :: Vocab -> WordString -> WordIdx
 wordIdx v = fst . ((wordCounts v) HM.!)
 
-safeWordIdx :: Vocab -> B.ByteString -> Maybe WordIdx
+safeWordIdx :: Vocab -> WordString -> Maybe WordIdx
 safeWordIdx v = fmap fst . (flip HM.lookup) (wordCounts v)
 
 -- exported
-findIndex :: Vocab -> WordIdx -> B.ByteString
+findIndex :: Vocab -> WordIdx -> WordString
 findIndex vocab str = (vocabWords vocab) IM.! str
 
 -- unused without subsampling:
---wordFreq :: Vocab -> B.ByteString -> Float
+--wordFreq :: Vocab -> WordString -> Float
 --wordFreq (Vocab tr total _ _) x = ((fromIntegral count) / (fromIntegral total))
 --	where (_, count) = tr HM.! x
 
- --subsampling isn't desirable, because we're mostly looking at the most frequent words
- --instead of all the words
---subsample :: (RandomGen g, Monad m) => Vocab -> B.ByteString -> RandT g m Bool
+-- subsampling (disabled)
+--subsample :: (RandomGen g, Monad m) => Vocab -> WordString -> RandT g m Bool
 --subsample vocab@(Vocab tr total _ _) x = if not $ hasWord vocab x then return False else do
 --	r <- getRandom
 --	let freq = wordFreq vocab x
@@ -199,20 +209,6 @@ findIndex vocab str = (vocabWords vocab) IM.! str
 
 getWordDesc :: Vocab -> WordIdx -> WordDesc
 getWordDesc vocab x = WordDesc x $ (vocabHuffman vocab) IM.! x
-
--- taking a vocabulary and training file, a window size and a training function,
--- fold over all the training word pairs
-doIteration :: (RandomGen g, Monad m) => Vocab -> B.ByteString -> WordCount ->
-				(a -> TrainProgress -> (WordDesc, WordDesc) -> m a) -> a -> RandT g m a
-doIteration vocab str ctx folder net = do
-	-- disable subsampling: it's not good for PCA image quality
-	-- trainlines <- lineFiltMArr (subsample vocab) str
-	let trainlines = lineArr str
-	iterateWordContexts trainlines ctx (startProgress vocab) (safeWordIdx vocab) filt train net
-	where
-		filt = hasWord vocab
-		train progress a net b = folder net progress
-								  (getWordDesc vocab a, getWordDesc vocab $ wordIdx vocab b)
 
 -- The Huffman Tree
 
@@ -262,15 +258,15 @@ assignCodes node upper codes = case node of
 -- when we're done training, we want to store the vectors in descending word frequency
 -- so plot_word2vec can read them
 -- todo: other sort, but we were using the priority queue anyways
-sortedWIDList :: WordIdCounts -> (WordIdx -> a) -> [(B.ByteString, a)]
+sortedWIDList :: WordIdCounts -> (WordIdx -> a) -> [(WordString, a)]
 sortedWIDList counts mapper = reverse $ pqtolist queue
 	where
 		queue = PQ.fromList $ map (\(k, (i, c)) -> (c, (k, mapper i))) $ HM.toList counts
-		pqtolist :: PQ.PQueue Int (B.ByteString, b) -> [(B.ByteString, b)]
+		pqtolist :: PQ.PQueue Int (WordString, b) -> [(WordString, b)]
 		pqtolist q = case PQ.minView q of
 			Just (v, x') -> v : pqtolist x'
 			Nothing -> []
 -- now define a function to get a sorted vector list directly from the vocab
 -- exported
-sortedVecList :: Vocab -> (WordIdx -> a) -> [(B.ByteString, a)]
+sortedVecList :: Vocab -> (WordIdx -> a) -> [(WordString, a)]
 sortedVecList = sortedWIDList . wordCounts
