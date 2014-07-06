@@ -1,23 +1,4 @@
 
--- let's use skipgrams
--- the basic approach:
--- each word in the vocabulary is an input node
--- the projection layer has 200 or so nodes
--- each word in the vocabulary is an output node, too
--- for each word in the vocabulary:
-   -- for each occurence:
-	  -- select a random value R, and look up R
-	  --   words before and R after the occurence
-	  -- add them to the training data
- -- shuffle the training data
- -- now train the neural net, checking the output with a softmax function
- -- (the input is a word, the output should be a word from the context)
- -- do this until the log-likelihood is high enough / doesn't get higher
-
--- another way to see this: each word has a feature vector,
---  multiply this with the output weight matrix to get the output values
--- softmax it based on the output word, and backprop it
-
 import Control.Monad.Random (evalRandT)
 import Control.Monad.Writer
 import System.Random (getStdGen)
@@ -53,16 +34,18 @@ runAllWords vocab content dimens = do
 			gen <- getStdGen
 			let itercount = 1 :: Int
 			-- fold NN.runWord over all the training pairs
-			-- max lookaround: 5, maxrate: 0.025, minrate: 0.0001
+			-- max lookaround: 5
 			let func = Vocab.doIteration vocab content 5 NN.runWord net
 			let (net2, statusupdates) = runWriter $ evalRandT func gen
+			-- report on the progress from the writer monad (statusupdates is a lazy list)
 			forM_ statusupdates (\(_rate, Vocab.TrainProgress itcount total, avg) ->
 				putStrLn $ "iteration " ++ (show itcount) ++
-								" / " ++ (show total) ++
+								" / "   ++ (show total) ++
 								" average: " ++ (show $ NN.calcAvg avg)
 				)
 			-- this returns a bool indicating success, ignore for now.
-			_ <- plotLine $ map (\(_, Vocab.TrainProgress itcount _, avg) -> (itcount, NN.calcAvg avg))
+			-- plot the error rate on a graph
+			_ <- plotLine "line.png" $ map (\(_, Vocab.TrainProgress itcount _, avg) -> (itcount, NN.calcAvg avg))
 						statusupdates
 			putStrLn $ "iteration " ++ (show itercount) ++ " complete "  ++ (show $ NN.forceEval net2)
 			return net2

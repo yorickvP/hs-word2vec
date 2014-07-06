@@ -10,6 +10,7 @@ import Control.Monad (forM_)
 -- we need to run pdftotext for every pdf in pdfs, collect the output
 -- and put it into a text file. then split that text file into sentences
 -- filter out lines that have less than 10 characters without a . at the end
+-- or filter them based on the previous and next lines, so we get paragraphs
 -- then discard sentences more than half starting with capitals
 processFile :: String -> IO ()
 processFile x = do

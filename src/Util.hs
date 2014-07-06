@@ -17,8 +17,8 @@ imap = flip imap' 0
 
 
 -- loosely based on http://hackage.haskell.org/package/easyplot-1.0/docs/src/Graphics-EasyPlot.html#Plot
-plot :: (Show a, Num a) => [(String, a, a)] -> IO Bool
-plot points = do
+plot :: (Show a, Num a) => String -> [(String, a, a)] -> IO Bool
+plot imgfile points = do
 	writeFile filename dataset
 	exitCode <- rawSystem "gnuplot" args
 	return $ exitCode == ExitSuccess
@@ -28,12 +28,12 @@ plot points = do
 		args = ["-e", join ";" [
 				"set term png size 1024,1024",
 				--"set offsets 1,1,1,1",
-				"set output \"pca.png\"",
+				"set output \"" ++ imgfile ++ "\"",
 				"plot \"" ++ filename ++ "\" using 2:3:1 with labels title \"\""]]
 		filename = "plot1.dat"
 
-plotLine :: (Show a, Num a) => [(Int, a)] -> IO Bool
-plotLine points = do
+plotLine :: (Show a, Num a) => String -> [(Int, a)] -> IO Bool
+plotLine imgfile points = do
 	writeFile filename dataset
 	exitCode <- rawSystem "gnuplot" args
 	return $ exitCode == ExitSuccess
@@ -43,6 +43,6 @@ plotLine points = do
 		args = ["-e", join ";" [
 				"set term png size 1024,1024",
 				--"set offsets 1,1,1,1",
-				"set output \"line.png\"",
+				"set output \"" ++ imgfile ++ "\"",
 				"plot \"" ++ filename ++ "\" using 1:2 with linespoints title \"\""]]
 		filename = "plot_line.dat"

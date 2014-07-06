@@ -19,7 +19,7 @@ main = do
 				(binary options) (limit options)
 	let pcaoutput = pca 2 $ snd $ unzip vecpairs
 	let e = zip (fst $ unzip vecpairs) pcaoutput
-	plot $ map (\(x, vec) -> (BC8.unpack x, vec Mt.@> 0, vec Mt.@> 1)) e
+	plot "pca.png" $ map (\(x, vec) -> (BC8.unpack x, vec Mt.@> 0, vec Mt.@> 1)) e
 	return ()
 	where
 		opts = info (helper <*> plotargs)
