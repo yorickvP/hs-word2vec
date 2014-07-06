@@ -18,7 +18,6 @@
 --  multiply this with the output weight matrix to get the output values
 -- softmax it based on the output word, and backprop it
 
-import Control.Monad (forM_)
 import Control.Monad.Random (evalRandT)
 import Control.Monad.Writer
 import System.Random (getStdGen)
@@ -57,12 +56,13 @@ runAllWords vocab content dimens = do
 			-- max lookaround: 5, maxrate: 0.025, minrate: 0.0001
 			let func = Vocab.doIteration vocab content 5 NN.runWord net
 			let (net2, statusupdates) = runWriter $ evalRandT func gen
-			forM_ statusupdates (\(rate, Vocab.TrainProgress itcount total, avg) ->
+			forM_ statusupdates (\(_rate, Vocab.TrainProgress itcount total, avg) ->
 				putStrLn $ "iteration " ++ (show itcount) ++
 								" / " ++ (show total) ++
 								" average: " ++ (show $ NN.calcAvg avg)
 				)
-			plotLine $ map (\(_, Vocab.TrainProgress itcount _, avg) -> (itcount, NN.calcAvg avg))
+			-- this returns a bool indicating success, ignore for now.
+			_ <- plotLine $ map (\(_, Vocab.TrainProgress itcount _, avg) -> (itcount, NN.calcAvg avg))
 						statusupdates
 			putStrLn $ "iteration " ++ (show itercount) ++ " complete "  ++ (show $ NN.forceEval net2)
 			return net2
