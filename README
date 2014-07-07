@@ -35,3 +35,4 @@ Output files
 Notes
 -----
 Sadly, it seems that the amount of data isn't enough to generate a word representation that is quite as nice as the one that can be obtained from running `plot --binary` on the (gunzipped) [sample vector file from the paper authors.](https://drive.google.com/file/d/0B7XkCwpI5KDYNlNUTTlSS21pQmM/edit?usp=sharing).
+For some more design rationale, please see observations.txt
