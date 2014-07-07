@@ -88,8 +88,8 @@ executable makeCorpus
   hs-source-dirs:      src
   default-language:    Haskell2010
 
-executable classify
-  main-is:             classify.hs
+executable train
+  main-is:             train.hs
   ghc-options: -Wall
   build-depends:       base >= 4.7 && <4.8,
                        random,
@@ -109,8 +109,8 @@ executable classify
   hs-source-dirs:      src
   default-language:    Haskell2010
 
-executable plot_word2vec
-  main-is:             plot_word2vec.hs
+executable plot
+  main-is:             plot.hs
   ghc-options: -Wall
   build-depends:       base >= 4.7 && <4.8,
                        MissingH,

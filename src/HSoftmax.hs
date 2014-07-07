@@ -1,4 +1,4 @@
-module HSNeuralNet (
+module HSoftmax (
     NeuralNet
   , randomNetwork
   , runWord

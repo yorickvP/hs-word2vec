@@ -10,7 +10,7 @@ import qualified Data.ByteString as B
 import qualified Data.ByteString.Char8 as C8
 import qualified Data.ByteString.Lazy as L
 import qualified Vocab as Vocab
-import qualified HSNeuralNet as NN
+import qualified HSoftmax as NN
 import Util
 
 
