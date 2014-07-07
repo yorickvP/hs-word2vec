@@ -26,7 +26,7 @@ plot imgfile points = do
 		-- todo see if this works when haskell uses scientific notation
 		dataset = unlines $ map (\(s, a, b) -> s ++ " " ++ (show a) ++ " " ++ (show b)) points
 		args = ["-e", join ";" [
-				"set term png size 1024,1024",
+				"set term png size 1024,1024 font \"Sans,8\"",
 				--"set offsets 1,1,1,1",
 				"set output \"" ++ imgfile ++ "\"",
 				"plot \"" ++ filename ++ "\" using 2:3:1 with labels title \"\""]]
