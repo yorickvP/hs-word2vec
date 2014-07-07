@@ -164,7 +164,7 @@ downloadPDF (url, req) manager = do
 -- arxiv complains when downloading pdfs and there is no user agent
 setUserAgent :: Request -> Request
 setUserAgent req = req { requestHeaders = (CI.mk $ pack "User-Agent",
-	pack "Haskell just scraping 400 or so documents don't mind me, blame zalora"):requestHeaders req }
+	pack "Haskell, downloading 400 or so pdfs"):requestHeaders req }
 
 main :: IO ()
 main = do
