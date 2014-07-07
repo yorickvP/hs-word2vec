@@ -22,7 +22,6 @@ processFile x = do
 			let (|>) = flip ($)
 			let l = lines out |> map strip |> filterN 1 usefulline |> filter usefulsentence |>
 					map removeref |> (map $ filter usefulchar) |>
-					-- todo: use tokenize.pl
 					join " " |> split "." |>
 					map strip |> filter usefulsentence |> 
 					map tokenWords |>
@@ -35,7 +34,7 @@ processFile x = do
 		usefulline _ x _         = endswith "." x || length x > 10
 		usefulchar x  = isLetter x || isNumber x || x == '.' || x == ' '
 		stringhasletter x = isJust $ find (isLetter) x
-		-- strip all of the [x] things, if they have no letters
+		-- strip all of the "[x]"" things, if they have no letters
 		removeref []   = []
 		removeref ('[':b) = case (span (/= ']') b) of
 			(a, ']':r) -> if stringhasletter a

@@ -65,11 +65,12 @@ readUp chr str = let (a, b) = BC8.break (== chr) str
 readVectorsFile :: String -> Bool -> Maybe Int -> IO [(BS.ByteString, Mt.Vector Double)]
 readVectorsFile filename binary limit = do
 	filecontent <- BS.readFile $ filename
+	-- the first line has dimensions and number of words
 	let (firstLine, vecs) = readUp '\n' filecontent
 	let [_, Just (numVecs, _)] = fmap BC8.readInt $ BC8.words firstLine
 	putStrLn $ "reading " ++ (show numVecs) ++ "-dimensional vectors"
 	return $ if binary then
-		let vecpairs = maybeTake limit $ iterate numVecs vecs
+		let vecpairs = maybeTake limit $ iterateBin numVecs vecs
 		    fieldlist = map (Mt.fromList . snd) vecpairs
 		in  zip (map fst vecpairs) fieldlist -- add the words back on
 	else
@@ -79,13 +80,13 @@ readVectorsFile filename binary limit = do
 			zip (map (head . BC8.words) cleanlines) fieldlist
 	where
 		readFields x = Mt.fromList (map (read . BC8.unpack) $ tail $ BC8.words x :: [Double])
-		iterate :: Int -> BS.ByteString -> [(BS.ByteString, [Double])]
-		iterate noVecs start
+		iterateBin :: Int -> BS.ByteString -> [(BS.ByteString, [Double])]
+		iterateBin noVecs start
 			| BS.length (BS.take 2 start) < 2 = []
 			| otherwise = let (rest, word, vecs) = parseBinary noVecs start
-						  in  (word, map float2Double vecs) : iterate noVecs rest
+						  in  (word, map float2Double vecs) : iterateBin noVecs rest
 
-
+-- sometimes, the vectors are stored in binary representation
 parseBinary :: Int -> BS.ByteString -> (BS.ByteString, BS.ByteString, [Float])
 parseBinary noVecs startStr = (rest', word, vectors)
 	where

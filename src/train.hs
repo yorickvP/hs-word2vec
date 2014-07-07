@@ -13,12 +13,31 @@ import qualified Vocab as Vocab
 import qualified HSoftmax as NN
 import Util
 
+-- read the corpus.txt file, make it into a vocabulary
+-- (but add a token for the end of the line to every line)
+-- and then train over all of the words
+main :: IO ()
+main = do
+	crps <- B.readFile "corpus.txt"
+	-- only use words that occur more than 5 times
+	let vocab = Vocab.makeVocab (Vocab.countWordFreqs $
+		concatMap (++ [C8.pack "</s>"]) $ map C8.words $ C8.lines crps) 5
+	putStrLn $ "Vocab loading complete: " ++
+		(show $ Vocab.wordCount vocab) ++ " total words, "
+		++ (show $ Vocab.uniqueWords vocab) ++ " unique words"
+	-- 100-dimensional vectors
+	runAllWords vocab crps 100
+
+
 
 runAllWords :: Vocab.Vocab -> B.ByteString -> Int -> IO ()
 runAllWords vocab content dimens = do
+	-- starting with an empty net
 	net  <- NN.randomNetwork (Vocab.uniqueWords vocab) dimens
+	-- train with all the words
 	net_ <- wordsIteration net
 	putStrLn "training complete, writing to outwords.txt"
+	-- write all of the vectors sorted by word frequency to outwords.txt
 	let sorted_vocab = Vocab.sortedVecList vocab (NN.getFeat net_)
 	L.writeFile "outwords.txt" (
 		-- bytestring unlines
@@ -51,16 +70,4 @@ runAllWords vocab content dimens = do
 			return net2
 			-- possibly run this multiple times, not needed
 			--if itercount < 10 then wordsIteration vocab net2 (itercount + 1) else return net2
-
-main :: IO ()
-main = do
-	crps <- B.readFile "corpus.txt"
-	-- only use words that occur more than 5 times
-	let vocab = Vocab.makeVocab (Vocab.countWordFreqs $
-		concatMap (++ [C8.pack "</s>"]) $ map C8.words $ C8.lines crps) 5
-	putStrLn $ "Vocab loading complete: " ++
-		(show $ Vocab.wordCount vocab) ++ " total words, "
-		++ (show $ Vocab.uniqueWords vocab) ++ " unique words"
-	-- 100-dimensional vectors
-	runAllWords vocab crps 100
 
