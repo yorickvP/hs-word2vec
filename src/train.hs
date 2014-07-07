@@ -45,7 +45,7 @@ runAllWords vocab content dimens = do
 				)
 			-- this returns a bool indicating success, ignore for now.
 			-- plot the error rate on a graph
-			_ <- plotLine "line.png" $ map (\(_, Vocab.TrainProgress itcount _, avg) -> (itcount, NN.calcAvg avg))
+			_ <- plotLine "error.png" $ map (\(_, Vocab.TrainProgress itcount _, avg) -> (itcount, NN.calcAvg avg))
 						statusupdates
 			putStrLn $ "iteration " ++ (show itercount) ++ " complete "  ++ (show $ NN.forceEval net2)
 			return net2
