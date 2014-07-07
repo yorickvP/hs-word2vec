@@ -1,0 +1,48 @@
+goals & observations
+--------------------
+- scrape arxiv
+  - arxiv doesn't like scraping
+  - they have a way to do bulk paper access, but that gets all of the papers (if there is need,
+      you can be clever by getting ranges from tars (but tars don't have indexes, so some kind
+         of probing would be needed). not worth the trouble)
+  - arxiv has a search API: http://arxiv.org/help/api/index
+    - the search API can't be used because it's not full-text search, which the provided link is.
+  - After scraping is done, I'm missing some papers. I think those are duplicates
+    - they seem to be duplicates. http://arxiv.org/pdf/cs.LG/0212028 vs http://arxiv.org/pdf/cs/0212028 (same paper in multiple categories)
+- make corpus
+  - arxiv is mostly pdf, contains some ps and text and source
+    - don't use source, that would need tex parser (this might be do-able)
+    - pdftotext seems good for extracting text from pdfs (but math is mostly unreadable)
+      - the -layout option is also nice, but not really for this purpose
+
+    - keep named entities, dataset isn't likely to have a lot except for references
+    - filter clusters(>1) of lines less than 30 characters long, except the line after a cluster (paragraph ending)
+    - filter math (coming through as a long sequence of single-letter words),
+      numbers and non-ascii text
+
+- distributed vector representation
+  - subsampling as described in the papers?
+    - no, because subsampling seems to decrease image quality (but improve training error)
+  - skipgrams seem to be the easiest to implement
+    - but the naive algorithm is O(n^2), so it doesn't scale. Hierarchical Softmax is needed
+      to speed it up.
+- use PCA and plot
+  - invoke gnuplot for making the graphs
+  - plot only the most frequent words
+  - be able to plot the output from the word2vec C code for comparison
+  - The outputted images are not as good as I expected them to be. Images generated from the word vectors bundles with the word2vec C code do better (trained on news, more data available)
+    - It seems, that, either:
+       1. the corpus is not big enough(or otherwise unfit) to get high-quality word vectors, or
+       2. I made a mistake somewhere (in makeCorpus, in the training code, or in one of the learning parameters)
+  - The outputted images have huge outliers ('et', 'al'), filter them using some kind of standard deviation filter method.
+
+
+task
+----
+
+If you are wondering why we put up a task, read "Delta Force" by Charlie Beckwith (management perspective) and "Inside Delta Force" by Eric Haney (data scientist perspective). 
+
+Here are 453 papers (as of this writing) containing recent IT bubble words like "big data": http://tinyurl.com/mczfmz9
+Here is a paper: http://arxiv.org/abs/1309.4168
+
+Crawl the first link to download all the papers, make them into a corpus, apply the methods in the second link, use PCA to reduce it to two dimensions, plot the words in question, send us the code for everything, the corpus, and include the graph in the body of the email. Try to write as much as possible in Haskell.

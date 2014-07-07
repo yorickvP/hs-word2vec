@@ -1,4 +1,4 @@
-import PCA (pca)
+import PCA (pca, filterOutlier)
 import Util
 import qualified Data.Packed.Vector as Mt
 import Options.Applicative
@@ -17,9 +17,14 @@ main = do
 
 	vecpairs <- readVectorsFile (filename options)
 				(binary options) (limit options)
-	let pcaoutput = pca 2 $ snd $ unzip vecpairs
+	let pcainput = snd $ unzip vecpairs
+	let pcaoutput = pca 2 pcainput
 	let e = zip (fst $ unzip vecpairs) pcaoutput
-	plot "pca.png" $ map (\(x, vec) -> (BC8.unpack x, vec Mt.@> 0, vec Mt.@> 1)) e
+	let f = case filtoutlier options of
+		Nothing -> e
+		Just thresh -> let outlierfilter = filterOutlier thresh pcaoutput in
+						filter (outlierfilter . snd) e
+	plot "pca.png" $ map (\(x, vec) -> (BC8.unpack x, vec Mt.@> 0, vec Mt.@> 1)) f
 	return ()
 	where
 		opts = info (helper <*> plotargs)
@@ -29,7 +34,8 @@ main = do
 data PlotArgs = PlotArgs
   { filename :: String
   , binary   :: Bool
-  , limit    :: Maybe Int }
+  , limit    :: Maybe Int
+  , filtoutlier :: Maybe Double }
 
 plotargs :: Parser PlotArgs
 plotargs = PlotArgs
@@ -42,6 +48,10 @@ plotargs = PlotArgs
       ( long "limit"
      <> metavar "LIMIT"
      <> help "Only plot the first entries" ))
+  <*> optional (option
+      ( long "filter"
+     <> metavar "THRESHOLD"
+     <> help "Filter the points with more than THRESHOLD times the stdev length(squared)" ))
 
 maybeTake :: Maybe Int -> [a] -> [a]
 maybeTake Nothing a = a
