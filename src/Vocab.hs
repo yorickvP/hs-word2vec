@@ -15,7 +15,7 @@ module Vocab (
 where
 
 import System.Random
-import Control.Monad (foldM) -- filterM, liftM
+import Control.Monad (foldM, filterM, liftM)
 import Control.Monad.Trans
 import Data.Maybe (isJust)
 import Control.Monad.Supply
@@ -135,12 +135,12 @@ iterateWordContexts vocab ctx folder startval arr =
 -- taking a vocabulary and training file, a window size and a training function,
 -- fold over all the training word pairs
 -- exported
-doIteration :: (RandomGen g, Monad m) => Vocab -> B.ByteString -> Int ->
+doIteration :: (RandomGen g, Monad m) => Maybe Float -> Vocab -> B.ByteString -> Int ->
 				(a -> TrainProgress -> (WordDesc, WordDesc) -> m a) -> a -> RandT g m a
-doIteration vocab str ctx folder net = do
-	-- disable subsampling: it's not good for PCA image quality
-	-- trainlines <- lineFiltMArr (subsample vocab) str
-	let trainlines = lineArr str
+doIteration subsamplerate vocab str ctx folder net = do
+	trainlines <- case subsamplerate of
+					Just rate -> lineFiltMArr (subsample rate vocab) str
+					Nothing   -> return $ lineArr str
 	(_progress', result) <- foldM (iterateWordContexts vocab ctx folder) (startProgress vocab, net) trainlines
 	return result
 
@@ -175,9 +175,9 @@ lineArr = map (toArray . (++ [C8.pack "</s>"]) . C8.words) . C8.lines
 	where toArray x = listArray (0, length x - 1) x
 
 -- used for subsampling: lineArr, but with a filterM on the words
---lineFiltMArr :: Monad m => (WordString -> m Bool) -> B.ByteString -> m [Array Int WordString]
---lineFiltMArr pred = mapM (liftM toArray . filterM pred . C8.words) . C8.lines
---	where toArray x = listArray (0, length x - 1) x
+lineFiltMArr :: Monad m => (WordString -> m Bool) -> B.ByteString -> m [Array Int WordString]
+lineFiltMArr pred = mapM (liftM toArray . filterM pred . C8.words) . C8.lines
+	where toArray x = listArray (0, length x - 1) x
 
 -- some vocab lookup functions
 
@@ -194,18 +194,18 @@ safeWordIdx v = fmap fst . (flip HM.lookup) (wordCounts v)
 findIndex :: Vocab -> WordIdx -> WordString
 findIndex vocab str = (vocabWords vocab) IM.! str
 
--- unused without subsampling:
---wordFreq :: Vocab -> WordString -> Float
---wordFreq (Vocab tr total _ _) x = ((fromIntegral count) / (fromIntegral total))
---	where (_, count) = tr HM.! x
+-- Used for subsampling:
+wordFreq :: Vocab -> WordString -> Float
+wordFreq (Vocab tr total _ _) x = ((fromIntegral count) / (fromIntegral total))
+	where (_, count) = tr HM.! x
 
--- subsampling (disabled)
---subsample :: (RandomGen g, Monad m) => Vocab -> WordString -> RandT g m Bool
---subsample vocab@(Vocab tr total _ _) x = if not $ hasWord vocab x then return False else do
---	r <- getRandom
---	let freq = wordFreq vocab x
---	let prob = max 0 $ 1.0 - sqrt (1e-5 / freq)
---	return $ not $ prob >= (r :: Float)
+-- subsampling (disabled by default)
+subsample :: (RandomGen g, Monad m) => Float -> Vocab -> WordString -> RandT g m Bool
+subsample rate vocab@(Vocab tr total _ _) x = if not $ hasWord vocab x then return False else do
+	r <- getRandom
+	let freq = wordFreq vocab x
+	let prob = max 0 $ 1.0 - sqrt (rate / freq)
+	return $ not $ prob >= (r :: Float)
 
 getWordDesc :: Vocab -> WordIdx -> WordDesc
 getWordDesc vocab x = WordDesc x $ (vocabHuffman vocab) IM.! x

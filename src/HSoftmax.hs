@@ -93,11 +93,8 @@ derivative of logsigmoid(-1 * x) = 0 - sigmoid(x) (or -sigmoid(x))
 -}
 -- Let's define the rate for a particular part of training, to get a decreasing learning rate.
 -- this might be more helpful with a bigger corpus, when there isn't much to be learned towards the end.
-rateMax :: Double
-rateMin :: Double
-(rateMax, rateMin) = (0.025, 0.001)
-rateAdj :: TrainProgress -> Double
-rateAdj (TrainProgress itcount total) =
+rateAdj :: (Double, Double) -> TrainProgress -> Double
+rateAdj (rateMax, rateMin) (TrainProgress itcount total) =
 	max rateMin $ rateMax * (1.0 - ((fromIntegral itcount) / (1.0 + fromIntegral total)))
 {-
 For every word a: for every some word b around it (this code is in Vocab), lookup a in a binary tree,
@@ -109,15 +106,15 @@ While doing this, keep track of the average gradient descent error, and every 10
 progress report.
 The code below is mostly equivalent to the word2vec C code for skipgram hierarchical softmax
 -}
-runWord :: NeuralNet -> TrainProgress -> (WordDesc, WordDesc) -> StatusWriter NeuralNet
-runWord net@(NeuralNet _ output avg) progress@(TrainProgress itcount _)
+runWord :: (Double, Double) -> NeuralNet -> TrainProgress -> (WordDesc, WordDesc) -> StatusWriter NeuralNet
+runWord (rateMax, rateMin) net@(NeuralNet _ output avg) progress@(TrainProgress itcount _)
 							  (WordDesc _ treepos, WordDesc expected _) = do
 	-- write a progress report every 10000 iterations (if we didn't already, this function is
 	-- used more than once per iteration)
 	when ((avgSize avg' > 100) && ((itcount `mod` 10000) == 0)) $ tell [(rate, progress, avg')]
 	return $ updateNet net expected newfeat newout newavg
 	where
-		rate    = rateAdj progress
+		rate    = rateAdj (rateMax, rateMin) progress
 		l1      = getFeat net expected
 		neu1e   = Mt.constant 0.0 (Mt.dim l1)
 		(neu1e', newout, toterr) = foldl' (singleIter rate l1) (neu1e, output, 0.0) treepos

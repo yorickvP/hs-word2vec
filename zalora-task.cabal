@@ -92,6 +92,7 @@ executable train
   main-is:             train.hs
   ghc-options: -Wall
   build-depends:       base >= 4.7 && <4.8,
+                       optparse-applicative,
                        random,
                        containers,
                        unordered-containers,
