@@ -7,19 +7,21 @@ vector representations, and running PCA on the result.
 
 Instructions
 ------------
-	cabal install --dependencies
-	cabal build
-	cabal run -- scrape http://tinyurl.com/mczfmz9
-	cabal run makeCorpus
-	# optional, improve quality and better progress reports
-	mv corpus.txt corpus_unshuffled.txt
-	sort --random-sort corpus_unshuffled.txt > corpus.txt
+```sh
+cabal install --dependencies
+cabal build
+cabal run -- scrape http://tinyurl.com/mczfmz9
+cabal run makeCorpus
+# optional, improve quality and better progress reports
+mv corpus.txt corpus_unshuffled.txt
+sort --random-sort corpus_unshuffled.txt > corpus.txt
 
-	cabal run train
-	cabal run -- plot outwords.txt --limit 110 --filter 3.5
-	# feh pca.png
-	# gnuplot # and enter:
-	#  plot "plot1.dat" using 2:3:1 with labels
+cabal run train
+cabal run -- plot outwords.txt --limit 110 --filter 3.5
+# feh pca.png
+# gnuplot # and enter:
+#  plot "plot1.dat" using 2:3:1 with labels
+```
 
 
 Output files
