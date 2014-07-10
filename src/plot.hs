@@ -1,14 +1,18 @@
 import PCA (pca, filterOutlier)
 import Util
 import qualified Data.Packed.Vector as Mt
+import qualified Numeric.Container as Mt
 import Options.Applicative
 import qualified Data.ByteString.Lazy.Char8 as BC8
 import qualified Data.ByteString.Lazy as BS
 import Data.Binary.Get
 import Data.Binary.IEEE754
+import Data.List (nub, sortBy)
+import Data.Maybe
 import Control.Monad
 import GHC.Float
 
+type DVec = Mt.Vector Double
 -- read a vector file
 -- (also has support for the binary format of the original C program)
 main :: IO ()
@@ -17,9 +21,12 @@ main = do
 
 	vecpairs <- readVectorsFile (filename options)
 				(binary options) (limit options)
-	let pcainput = snd $ unzip vecpairs
+	let vecpairs' = if not (null $ near options) then
+		nub $ concat $ map (\wrd -> mostSimilarN (fromJust $ lookup (BC8.pack wrd) vecpairs) (nearlim options) vecpairs) (near options)
+		else vecpairs
+	let pcainput = snd $ unzip vecpairs'
 	let pcaoutput = pca 2 pcainput
-	let e = zip (fst $ unzip vecpairs) pcaoutput
+	let e = zip (fst $ unzip vecpairs') pcaoutput
 	let f = case filtoutlier options of
 		Nothing -> e
 		Just thresh -> let outlierfilter = filterOutlier thresh pcaoutput in
@@ -35,7 +42,9 @@ data PlotArgs = PlotArgs
   { filename :: String
   , binary   :: Bool
   , limit    :: Maybe Int
-  , filtoutlier :: Maybe Double }
+  , filtoutlier :: Maybe Double
+  , near :: [String]
+  , nearlim :: Int }
 
 plotargs :: Parser PlotArgs
 plotargs = PlotArgs
@@ -52,6 +61,16 @@ plotargs = PlotArgs
       ( long "filter"
      <> metavar "THRESHOLD"
      <> help "Filter the points with more than THRESHOLD times the stdev length(squared)" ))
+  <*> many (option
+      ( long "near"
+     <> metavar "NEARWORD"
+     <> help "Only show words near a specific word"
+     <> reader str ))
+  <*> option
+      ( long "nearlim"
+     <> metavar "NEARLIMIT"
+     <> help "filter to words with the highest cosineSimilarity"
+     <> value 10 )
 
 maybeTake :: Maybe Int -> [a] -> [a]
 maybeTake Nothing a = a
@@ -98,3 +117,12 @@ parseBinary noVecs startStr = (rest', word, vectors)
 		(vectors, rest') = runGet parseBin rest
 		parseBin = liftM2 (,) (replicateM noVecs getFloat32le) getRemainingLazyByteString
 
+
+cosineSimilarity :: DVec -> DVec -> Double
+cosineSimilarity a b = (a `Mt.dot` b) / ((Mt.norm2 a) * (Mt.norm2 b))
+
+sortWithRev f = sortBy (\x y -> compare (f y) (f x))
+-- take the N most similar vectors to comparison
+-- this should probably use a limited-size priority queue instead
+mostSimilarN :: DVec -> Int -> [(BS.ByteString, DVec)] -> [(BS.ByteString, DVec)]
+mostSimilarN comparison limit = take limit . sortWithRev (cosineSimilarity comparison . snd)
