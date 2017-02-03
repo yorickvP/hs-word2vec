@@ -1,3 +1,5 @@
+This code is pretty old (2014), and could use some cleanup. I don't expect that anyone will ever use it. Most learning progress is made when you try your hand at stuff that you have absolutely no business attempting, this is one of my attempts.
+
 About
 -----
 This is the code that I wrote for the task at http://www.haskellers.com/jobs/61 , where the goal
